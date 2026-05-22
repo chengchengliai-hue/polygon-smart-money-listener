@@ -77,8 +77,8 @@ func initInformedTables(db *sql.DB) {
 func loadWhaleAddresses() []RiskWalletEntry {
 	rows, err := db.Query(`
 		SELECT address, score, tags FROM whale_alerts
-		WHERE severity = 'high' OR score >= 90
-		ORDER BY score DESC LIMIT 200
+		WHERE score >= 70
+		ORDER BY score DESC LIMIT 500
 	`)
 	if err != nil {
 		return nil

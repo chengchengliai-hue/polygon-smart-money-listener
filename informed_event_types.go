@@ -125,26 +125,3 @@ type InformedEventData struct {
 	DetectedAt           string   `json:"detected_at"`
 }
 
-// ═══════════════════════════════════════════
-// Gamma API market
-// ═══════════════════════════════════════════
-
-type GammaEvent struct {
-	ID          string         `json:"id"`
-	Title       string         `json:"title"`
-	Slug        string         `json:"slug"`
-	Category    string         `json:"category"`
-	Liquidity   string         `json:"liquidity"`
-	Volume      string         `json:"volume"`
-	EndDate     string         `json:"end_date"`
-	Markets     []GammaMarket  `json:"markets"`
-}
-
-type GammaMarket struct {
-	ID                string           `json:"id"`
-	Question          string           `json:"question"`
-	ConditionID       string           `json:"condition_id"`
-	Outcomes          []string         `json:"outcomes"`
-	OutcomePrices     []string         `json:"outcome_prices"`
-	ClobTokenIDs      []string         `json:"clob_token_ids"`
-}

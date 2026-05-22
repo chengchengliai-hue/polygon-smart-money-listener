@@ -1,8 +1,6 @@
 package main
 
 type InformedConfig struct {
-	GammaBaseURL     string
-	ClobBaseURL      string
 	CtfExchange      string
 	NegRiskExchange  string
 	WalletRefreshSec int
@@ -20,8 +18,6 @@ var informedConfig InformedConfig
 
 func loadInformedConfig() {
 	informedConfig = InformedConfig{
-		GammaBaseURL:     getEnv("POLYMARKET_GAMMA_BASE", "https://gamma-api.polymarket.com"),
-		ClobBaseURL:      getEnv("POLYMARKET_CLOB_BASE", "https://clob.polymarket.com"),
 		CtfExchange:      getEnv("POLYMARKET_CTF_EXCHANGE", "0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E"),
 		NegRiskExchange:  getEnv("POLYMARKET_NEG_RISK_EXCHANGE", "0xC5d563A36AE78145C45a50134d48A1215220f80a"),
 		WalletRefreshSec: getEnvInt("RISK_WALLET_REFRESH_SECONDS", 60),
@@ -32,7 +28,7 @@ func loadInformedConfig() {
 		MinTradeUsdc:     getEnvFloat("INFORMED_MIN_TRADE_USDC", 5000),
 		WindowSeconds:    getEnvInt("INFORMED_WINDOW_SECONDS", 900),
 		MinLiquidity:     getEnvFloat("INFORMED_MARKET_MIN_LIQUIDITY", 1000),
-		HedgePenalty:     getEnvInt("HEDGE_PENALTY", -30),
+		HedgePenalty:     getEnvInt("HEDGE_PENALTY", -50),
 	}
 }
 
