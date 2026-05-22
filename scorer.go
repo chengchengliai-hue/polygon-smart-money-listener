@@ -49,9 +49,12 @@ func scoreAddress(win *AddressWindow, nonce *int64, isContract bool) ScoredAddre
 
 	for _, f := range funders {
 		if isWhaleAlerted(f.Address) {
-			fromWhale = true
-			score += 20
-			tags = append(tags, "Fund Hopping")
+			// Only count as whale if funder still has significant balance
+			if checkFunderBalance(f.Address) > config.BalanceThresholdUsd {
+				fromWhale = true
+				score += 20
+				tags = append(tags, "Fund Hopping")
+			}
 			break
 		}
 	}
@@ -67,16 +70,6 @@ func scoreAddress(win *AddressWindow, nonce *int64, isContract bool) ScoredAddre
 	if win.TxCount >= 3 && len(funders) >= 2 {
 		score += 5
 		tags = append(tags, "Split Accumulation")
-	}
-
-	// Transit detection: money came in but mostly left within the window
-	if win.GrossInflow > 0 && win.TotalUsd < win.GrossInflow*0.3 {
-		score -= 30
-		tags = append(tags, "Transit")
-	}
-	// Accumulating: most money stayed
-	if win.GrossInflow > 0 && win.TotalUsd > win.GrossInflow*0.8 {
-		tags = append(tags, "Accumulating")
 	}
 
 	// Already alerted in past 7 days → -10

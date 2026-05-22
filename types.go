@@ -14,14 +14,13 @@ type TransferEvent struct {
 }
 
 type AddressWindow struct {
-	Address     string
-	Transfers   []TransferEvent
-	TotalUsd    float64 // Net inflow (in - out)
-	GrossInflow float64 // Total positive inflow only
-	TxCount     int
-	Funders     map[string]float64
-	FirstSeen   int64
-	LastSeen    int64
+	Address   string
+	Transfers []TransferEvent
+	TotalUsd  float64
+	TxCount   int
+	Funders   map[string]float64
+	FirstSeen int64
+	LastSeen  int64
 }
 
 type FundersEntry struct {

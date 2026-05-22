@@ -115,12 +115,10 @@ func startListener() error {
 	windowTicker := time.NewTicker(30 * time.Second)
 	statusTicker := time.NewTicker(300 * time.Second)
 	gapTicker := time.NewTicker(120 * time.Second)
-	balanceTicker := time.NewTicker(300 * time.Second)
 	defer gcTicker.Stop()
 	defer windowTicker.Stop()
 	defer statusTicker.Stop()
 	defer gapTicker.Stop()
-	defer balanceTicker.Stop()
 
 	for {
 		select {
@@ -157,71 +155,12 @@ func startListener() error {
 		case <-statusTicker.C:
 			outputSummary(processedCount, alertCount)
 
-		case <-balanceTicker.C:
-			checkPostAlertBalances(httpClient)
-
 		case <-gapTicker.C:
 			if lastProcessedBlock < catchUpTo-10 {
 				catchUpBlocks(lastProcessedBlock+1, catchUpTo)
 			}
 		}
 	}
-}
-
-func checkPostAlertBalances(httpClient *ethclient.Client) {
-	if httpClient == nil {
-		return
-	}
-	// Query recent alerts from the past 30 minutes
-	rows, err := db.Query(
-		"SELECT id, address, total_usd FROM whale_alerts WHERE alerted_at > datetime('now', '-30 minutes')",
-	)
-	if err != nil {
-		return
-	}
-	defer rows.Close()
-
-	usdtContract := common.HexToAddress("0xc2132D05D31c914a87C6611C10748AEb04B58e8F")
-	usdcContract := common.HexToAddress("0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359")
-	balanceOf := common.HexToHash("0x70a0823100000000000000000000000000000000000000000000000000000000")
-
-	for rows.Next() {
-		var id int64
-		var addr string
-		var totalUsd float64
-		rows.Scan(&id, &addr, &totalUsd)
-
-		address := common.HexToAddress(addr)
-		// Check USDT balance
-		usdtData := append(balanceOf.Bytes()[:4], common.LeftPadBytes(address.Bytes(), 32)...)
-		usdtResult, _ := httpClient.CallContract(context.Background(), ethereum.CallMsg{To: &usdtContract, Data: usdtData}, nil)
-		usdtBal := new(big.Int).SetBytes(usdtResult)
-
-		// Check USDC balance
-		usdcData := append(balanceOf.Bytes()[:4], common.LeftPadBytes(address.Bytes(), 32)...)
-		usdcResult, _ := httpClient.CallContract(context.Background(), ethereum.CallMsg{To: &usdcContract, Data: usdcData}, nil)
-		usdcBal := new(big.Int).SetBytes(usdcResult)
-
-		divisor := new(big.Float).SetInt(new(big.Int).Exp(big.NewInt(10), big.NewInt(6), nil))
-		usdtFloat, _ := new(big.Float).Quo(new(big.Float).SetInt(usdtBal), divisor).Float64()
-		usdcFloat, _ := new(big.Float).Quo(new(big.Float).SetInt(usdcBal), divisor).Float64()
-		currentTotal := usdtFloat + usdcFloat
-
-		// If balance dropped to < 10% of alert amount, tag as Transit
-		if totalUsd > 0 && currentTotal < totalUsd*0.1 {
-			db.Exec("UPDATE whale_alerts SET tags = json_insert(tags, '$[#]', 'Transit') WHERE id = ?", id)
-			addAddressLabel(addr, "transit")
-		}
-		// If balance grew significantly, tag as Accumulating
-		if currentTotal > totalUsd*2 {
-			db.Exec("UPDATE whale_alerts SET tags = json_insert(tags, '$[#]', 'Accumulating') WHERE id = ?", id)
-			addAddressLabel(addr, "accumulating")
-		}
-	}
-}
-
-func addAddressLabel(addr, label string) {
-	db.Exec("INSERT OR REPLACE INTO address_labels (address, label) VALUES (?, ?)", addr, label)
 }
 
 func catchUpBlocks(from, to uint64) {
@@ -322,6 +261,37 @@ func parseTransferLog(vLog types.Log) *TransferEvent {
 		Token:       token,
 		Timestamp:   time.Now().Unix(),
 	}
+}
+
+// checkFunderBalance queries current USDT+USDC balance of an address
+// Used to verify a historical whale still has funds before granting bonus score
+func checkFunderBalance(addr string) float64 {
+	client, err := ethclient.Dial(config.HttpRpcUrl)
+	if err != nil {
+		return 0
+	}
+	defer client.Close()
+
+	address := common.HexToAddress(addr)
+	usdtContract := common.HexToAddress("0xc2132D05D31c914a87C6611C10748AEb04B58e8F")
+	usdcContract := common.HexToAddress("0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359")
+	balanceOf := common.HexToHash("0x70a0823100000000000000000000000000000000000000000000000000000000")
+
+	// USDT
+	usdtData := append(balanceOf.Bytes()[:4], common.LeftPadBytes(address.Bytes(), 32)...)
+	usdtResult, _ := client.CallContract(context.Background(), ethereum.CallMsg{To: &usdtContract, Data: usdtData}, nil)
+	usdtBal := new(big.Int).SetBytes(usdtResult)
+
+	// USDC
+	usdcData := append(balanceOf.Bytes()[:4], common.LeftPadBytes(address.Bytes(), 32)...)
+	usdcResult, _ := client.CallContract(context.Background(), ethereum.CallMsg{To: &usdcContract, Data: usdcData}, nil)
+	usdcBal := new(big.Int).SetBytes(usdcResult)
+
+	divisor := new(big.Float).SetInt(new(big.Int).Exp(big.NewInt(10), big.NewInt(6), nil))
+	usdtFloat, _ := new(big.Float).Quo(new(big.Float).SetInt(usdtBal), divisor).Float64()
+	usdcFloat, _ := new(big.Float).Quo(new(big.Float).SetInt(usdcBal), divisor).Float64()
+
+	return usdtFloat + usdcFloat
 }
 
 func getNonce(client *ethclient.Client, addr string) *int64 {
