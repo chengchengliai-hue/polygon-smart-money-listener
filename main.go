@@ -24,7 +24,8 @@ var (
 
 	// Token addresses (lowercase)
 	usdtAddr = common.HexToAddress("0xc2132D05D31c914a87C6611C10748AEb04B58e8F")
-	usdcAddr = common.HexToAddress("0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359")
+	usdcAddr     = common.HexToAddress("0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359")
+	usdcEAddr    = common.HexToAddress("0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174") // USDC.e bridged
 	transferTopic = common.HexToHash("0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef")
 )
 
@@ -50,12 +51,21 @@ func main() {
 }
 
 func run() {
+	backoff := 1 * time.Second
 	for {
 		err := startListener()
 		if err != nil {
-			log.Printf("[error] %v, reconnecting in 10s...", err)
+			log.Printf("[error] %v, reconnecting in %v...", err, backoff)
 			saveRuntimeState("last_processed_block", fmt.Sprintf("%d", lastProcessedBlock))
-			time.Sleep(10 * time.Second)
+			time.Sleep(backoff)
+			// Exponential backoff: 1s → 2s → 4s → 8s → 16s → max 60s
+			backoff *= 2
+			if backoff > 60*time.Second {
+				backoff = 60 * time.Second
+			}
+		} else {
+			// Successful connection, reset backoff
+			backoff = 1 * time.Second
 		}
 	}
 }
@@ -93,7 +103,7 @@ func startListener() error {
 
 	// Subscribe to Transfer events
 	query := ethereum.FilterQuery{
-		Addresses: []common.Address{usdtAddr, usdcAddr},
+		Addresses: []common.Address{usdtAddr, usdcAddr, usdcEAddr},
 		Topics:    [][]common.Hash{{transferTopic}},
 	}
 
@@ -164,7 +174,6 @@ func startListener() error {
 
 		case <-gcTicker.C:
 			collectGarbage()
-			cleanProcessedLogs()
 
 		case <-windowTicker.C:
 			checkExceededWindows(httpClient)
@@ -197,7 +206,7 @@ func catchUpBlocks(from, to uint64) {
 			end = to
 		}
 		logs, err := httpClient.FilterLogs(context.Background(), ethereum.FilterQuery{
-			Addresses: []common.Address{usdtAddr, usdcAddr},
+			Addresses: []common.Address{usdtAddr, usdcAddr, usdcEAddr},
 			Topics:    [][]common.Hash{{transferTopic}},
 			FromBlock: new(big.Int).SetUint64(start),
 			ToBlock:   new(big.Int).SetUint64(end),
@@ -259,6 +268,8 @@ func parseTransferLog(vLog types.Log) *TransferEvent {
 	case strings.ToLower(usdtAddr.Hex()):
 		token = "USDT"
 	case strings.ToLower(usdcAddr.Hex()):
+		token = "USDC"
+	case strings.ToLower(usdcEAddr.Hex()):
 		token = "USDC"
 	default:
 		return nil
