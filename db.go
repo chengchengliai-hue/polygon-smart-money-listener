@@ -51,6 +51,9 @@ func initDB() {
 	if err != nil {
 		log.Fatalf("[db] init schema: %v", err)
 	}
+
+	// Polymarket informed event tables
+	initInformedTables(db)
 }
 
 func isAddressSeen(address string) bool {
@@ -102,4 +105,13 @@ func getRuntimeState(key string) string {
 		return ""
 	}
 	return value
+}
+
+func getAddressLabel(address string) string {
+	var label string
+	err := db.QueryRow("SELECT label FROM address_labels WHERE address = ?", address).Scan(&label)
+	if err != nil {
+		return ""
+	}
+	return label
 }

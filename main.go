@@ -36,6 +36,11 @@ func main() {
 	loadConfig()
 	initDB()
 
+	// Start Polymarket informed event listener
+	startWalletLinkRefresher()
+	startMarketRefresher()
+	startPolymarketListener()
+
 	// Handle graceful shutdown
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
