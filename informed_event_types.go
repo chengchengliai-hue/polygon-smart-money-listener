@@ -125,3 +125,31 @@ type InformedEventData struct {
 	DetectedAt           string   `json:"detected_at"`
 }
 
+
+// Gamma API market (re-enabled with proxy support)
+type GammaEvent struct {
+	ID        string        `json:"id"`
+	Title     string        `json:"title"`
+	Slug      string        `json:"slug"`
+	Liquidity float64       `json:"liquidity"`
+	Volume    float64       `json:"volume"`
+	EndDate   string        `json:"end_date"`
+	Closed    bool          `json:"closed"`
+	Tags      []GammaTag    `json:"tags"`
+	Markets   []GammaMarket `json:"markets"`
+}
+
+type GammaTag struct {
+	ID    int    `json:"id"`
+	Label string `json:"label"`
+	Slug  string `json:"slug"`
+}
+
+type GammaMarket struct {
+	ID            string `json:"id"`
+	Question      string `json:"question"`
+	ConditionID   string `json:"condition_id"`
+	OutcomesRaw   string `json:"outcomes"`
+	OutcomePricesRaw string `json:"outcome_prices"`
+	ClobTokenIDsRaw   string `json:"clob_token_ids"`
+}

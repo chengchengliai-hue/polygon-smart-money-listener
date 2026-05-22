@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"math/big"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -49,9 +51,54 @@ func startMarketRefresher() {
 	}()
 }
 
-// refreshMarketsFromChain loads markets from SQLite cache + on-chain token discovery
+// refreshMarketsFromChain loads markets from SQLite cache + Gamma API + on-chain discovery
 func refreshMarketsFromChain() {
 	loadMarketsFromCache()
+
+	// Try Gamma API via proxy
+	gammaEvents, err := fetchGammaEvents()
+	if err == nil && len(gammaEvents) > 0 {
+		newMap := make(map[string]*TokenOutcome)
+		for _, evt := range gammaEvents {
+			if evt.Closed {
+				continue
+			}
+			// Extract category from tags
+			cat := ""
+			for _, tag := range evt.Tags {
+				cat = normalizeCategory(tag.Label)
+				if cat != "" && highInfoCategories[cat] {
+					break
+				}
+			}
+			if cat == "" {
+				cat = normalizeCategory(evt.Slug)
+			}
+			if !highInfoCategories[cat] {
+				continue
+			}
+			for _, mkt := range evt.Markets {
+				clobIDs := parseJSONStringArray(mkt.ClobTokenIDsRaw)
+				if len(clobIDs) < 2 {
+					continue
+				}
+				yesT := &TokenOutcome{TokenID: clobIDs[0], ConditionID: mkt.ConditionID, MarketSlug: evt.Slug, Question: mkt.Question, Outcome: "YES", OutcomeIndex: 0, Category: cat}
+				noT := &TokenOutcome{TokenID: clobIDs[1], ConditionID: mkt.ConditionID, MarketSlug: evt.Slug, Question: mkt.Question, Outcome: "NO", OutcomeIndex: 1, Category: cat}
+					newMap[yesT.TokenID] = yesT
+					newMap[noT.TokenID] = noT
+					saveInformedMarket(yesT)
+					saveInformedMarket(noT)
+				}
+			}
+			tokenOutcomeMapMu.Lock()
+			tokenOutcomeMap = newMap
+			tokenOutcomeMapMu.Unlock()
+			log.Printf("[markets] gamma: cached %d high-info token outcomes", len(newMap))
+		} else if err != nil {
+		log.Printf("[markets] gamma unavailable: %v", err)
+	}
+
+	// On-chain fallback
 	refreshFromRecentTrades()
 }
 
@@ -156,6 +203,18 @@ func refreshFromRecentTrades() {
 
 // parseTokenID extracts conditionId and outcome index from a CTF token ID
 // CTF token IDs: uint256(conditionId) << 1 | outcomeIndex
+
+// parseJSONStringArray parses Polymarket Gamma API's string-encoded JSON arrays
+// e.g. "[\"Yes\", \"No\"]" → ["Yes", "No"]
+func parseJSONStringArray(raw string) []string {
+	if raw == "" {
+		return nil
+	}
+	var result []string
+	json.Unmarshal([]byte(raw), &result)
+	return result
+}
+
 func parseTokenID(tokenID string) (string, int) {
 	n := new(big.Int)
 	n.SetString(tokenID, 10)
@@ -219,3 +278,26 @@ func saveInformedMarket(t *TokenOutcome) {
 	)
 }
 
+
+
+
+func fetchGammaEvents() ([]GammaEvent, error) {
+	req, err := http.NewRequest("GET", informedConfig.GammaBaseURL+"/events?limit=200&closed=false", nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36")
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var events []GammaEvent
+	if err := json.NewDecoder(resp.Body).Decode(&events); err != nil {
+		return nil, err
+	}
+	return events, nil
+}
