@@ -21,7 +21,7 @@ func detectHedge(matched *MatchedTrade) bool {
 			matched.TokenOutcome.Outcome,
 			matched.Action,
 			matched.TxHash,
-			max(matched.MakerAmount, matched.TakerAmount),
+			(func() float64 { if matched.MakerAmount > matched.TakerAmount { return matched.MakerAmount }; return matched.TakerAmount })(),
 			matched.BlockNumber,
 		)
 		return false
@@ -29,7 +29,10 @@ func detectHedge(matched *MatchedTrade) bool {
 
 	// Check if any previous activity in the window was on the OPPOSITE outcome
 	currentOutcome := matched.TokenOutcome.Outcome
-	currentAmount := max(matched.MakerAmount, matched.TakerAmount)
+	currentAmount := matched.TakerAmount
+	if currentAmount < matched.MakerAmount {
+		currentAmount = matched.MakerAmount
+	}
 
 	for _, h := range history {
 		if h.Outcome != currentOutcome {
@@ -58,9 +61,3 @@ func detectHedge(matched *MatchedTrade) bool {
 	return false
 }
 
-func max(a, b float64) float64 {
-	if a > b {
-		return a
-	}
-	return b
-}

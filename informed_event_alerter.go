@@ -12,6 +12,7 @@ func outputInformedAlert(scored InformedScoredEvent) {
 	conditionID := ""
 	tokenID := ""
 	outcome := ""
+	outcomeIdx := 0
 
 	if scored.TokenOutcome != nil {
 		category = scored.TokenOutcome.Category
@@ -19,11 +20,14 @@ func outputInformedAlert(scored InformedScoredEvent) {
 		conditionID = scored.TokenOutcome.ConditionID
 		tokenID = scored.TokenOutcome.TokenID
 		outcome = scored.TokenOutcome.Outcome
+		outcomeIdx = scored.TokenOutcome.OutcomeIndex
 	}
 
-	estimatedUsdc := scored.MakerAmount
-	if scored.TakerAmount > estimatedUsdc {
-		estimatedUsdc = scored.TakerAmount
+	// For market orders, takerAmountFilled is the cash/collateral leg (USDC)
+	// makerAmountFilled is the share/outcome token leg
+	estimatedUsdc := scored.TakerAmount
+	if estimatedUsdc < scored.MakerAmount {
+		estimatedUsdc = scored.MakerAmount
 	}
 
 	alert := InformedEventAlert{
@@ -43,7 +47,7 @@ func outputInformedAlert(scored InformedScoredEvent) {
 			ConditionID:          conditionID,
 			TokenID:              tokenID,
 			Outcome:              outcome,
-			OutcomeIndex:         scored.TokenOutcome.OutcomeIndex,
+			OutcomeIndex:         outcomeIdx,
 			Action:               scored.Action,
 			Direction:            scored.Direction,
 			EstimatedUsdc:        estimatedUsdc,

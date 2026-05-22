@@ -138,6 +138,9 @@ func saveWalletConditionActivity(rootAddr, conditionID, outcome, action, txHash 
 }
 
 func saveInformedAlert(alert InformedEventAlert) {
+	if db == nil {
+		return
+	}
 	tagsJson, _ := json.Marshal(alert.Data.Tags)
 	db.Exec(
 		`INSERT INTO informed_event_alerts (root_address, matched_address, matched_wallet_type, condition_id, token_id, outcome, action, category, estimated_usdc, score, severity, tags, tx_hash, log_index, block_number)

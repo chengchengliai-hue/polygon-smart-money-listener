@@ -47,17 +47,11 @@ func refreshRiskWalletLinks() {
 }
 
 // discoverLinkedWallets attempts to find Proxy/Safe/Deposit wallets for an EOA
-// v1: basic heuristics — check known Polymarket proxy factory patterns
-// Future: query Polymarket relayer API or on-chain proxy registry
 func discoverLinkedWallets(eoa string) []LinkedWallet {
 	var linked []LinkedWallet
 	addr := strings.ToLower(eoa)
 
-	// Polymarket Proxy factory deployed proxies are deterministic
-	// For v1, we check if the address itself matches known patterns
-	// Full proxy discovery requires querying the Polymarket proxy registry
-
-	// Check existing labels in DB
+	// 1. Check DB labels for this exact address
 	label := getAddressLabel(addr)
 	switch label {
 	case "polymarket_proxy":
@@ -67,6 +61,55 @@ func discoverLinkedWallets(eoa string) []LinkedWallet {
 	case "polymarket_deposit":
 		linked = append(linked, LinkedWallet{Address: addr, Type: WalletDeposit})
 	}
+
+	// 2. Query whale_alerts: add primary funders of THIS address as linked wallets
+	// If a whale address was funded by a known proxy/Safe, add it too
+	func() {
+		rows, err := db.Query(
+			`SELECT DISTINCT primary_funder_address FROM whale_alerts WHERE address = ?`,
+			addr,
+		)
+		if err != nil {
+			return
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var funder string
+			rows.Scan(&funder)
+			if funder != "" && strings.ToLower(funder) != addr {
+				fLabel := getAddressLabel(strings.ToLower(funder))
+				fType := WalletEOA
+				switch fLabel {
+				case "polymarket_proxy":
+					fType = WalletPolyProxy
+				case "gnosis_safe":
+					fType = WalletGnosisSafe
+				case "polymarket_deposit":
+					fType = WalletDeposit
+				}
+				linked = append(linked, LinkedWallet{Address: funder, Type: fType})
+			}
+		}
+	}()
+
+	// 3. Also add addresses that THIS whale funded (potential proxy outflows)
+	func() {
+		rows, err := db.Query(
+			`SELECT DISTINCT address FROM whale_alerts WHERE primary_funder_address = ?`,
+			addr,
+		)
+		if err != nil {
+			return
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var funded string
+			rows.Scan(&funded)
+			if funded != "" && strings.ToLower(funded) != addr {
+				linked = append(linked, LinkedWallet{Address: funded, Type: WalletEOA})
+			}
+		}
+	}()
 
 	return linked
 }

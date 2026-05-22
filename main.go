@@ -188,8 +188,13 @@ func startListener() error {
 			outputSummary(processedCount, alertCount)
 
 		case <-gapTicker.C:
-			if lastProcessedBlock < catchUpTo-10 {
-				catchUpBlocks(lastProcessedBlock+1, catchUpTo)
+			// Refresh catch-up target from current chain head
+			currentBlock, err := httpClient.BlockNumber(context.Background())
+			if err == nil {
+				liveCatchUpTo := currentBlock - uint64(config.ConfirmationBlocks)
+				if lastProcessedBlock < liveCatchUpTo-10 {
+					catchUpBlocks(lastProcessedBlock+1, liveCatchUpTo)
+				}
 			}
 		}
 	}

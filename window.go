@@ -70,6 +70,22 @@ func addTransfer(event *TransferEvent) {
 		win.LastSeen = event.Timestamp
 	}
 
+	// Prune transfers older than window before recalculating
+	cutoff := event.Timestamp - int64(config.WindowSeconds)
+	var kept []TransferEvent
+	win.TotalUsd = 0
+	win.TxCount = 0
+	win.Funders = make(map[string]float64)
+	for _, t := range win.Transfers {
+		if t.Timestamp >= cutoff {
+			kept = append(kept, t)
+			win.TotalUsd += t.ValueUsd
+			win.TxCount++
+			win.Funders[t.From] += t.ValueUsd
+		}
+	}
+	win.Transfers = kept
+
 	win.Transfers = append(win.Transfers, *event)
 	win.TxCount++
 	win.TotalUsd += event.ValueUsd
