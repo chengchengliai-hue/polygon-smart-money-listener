@@ -1,14 +1,52 @@
 package main
 
 import (
+	"fmt"
 	"sync"
 	"time"
 )
 
 var (
-	windows   = make(map[string]*AddressWindow)
-	windowsMu sync.Mutex
+	windows       = make(map[string]*AddressWindow)
+	windowsMu     sync.Mutex
+	processedLogs = make(map[string]int64) // key: "txHash_logIndex" → expiry unix timestamp
+	processedMu   sync.Mutex
 )
+
+// isDuplicate checks if this log was already processed (idempotency)
+// Returns true if duplicate, false if new
+func isDuplicate(txHash string, logIndex uint) bool {
+	key := fmt.Sprintf("%s_%d", txHash, logIndex)
+	processedMu.Lock()
+	defer processedMu.Unlock()
+
+	now := time.Now().Unix()
+	if expiry, ok := processedLogs[key]; ok && expiry > now {
+		return true
+	}
+	processedLogs[key] = now + 900 // 15 minute TTL
+	return false
+}
+
+// removeProcessedLog removes a log from the dedup cache (for reorg reversal)
+func removeProcessedLog(txHash string, logIndex uint) {
+	key := fmt.Sprintf("%s_%d", txHash, logIndex)
+	processedMu.Lock()
+	delete(processedLogs, key)
+	processedMu.Unlock()
+}
+
+// cleanProcessedLogs removes expired entries from the dedup cache
+func cleanProcessedLogs() {
+	processedMu.Lock()
+	defer processedMu.Unlock()
+	now := time.Now().Unix()
+	for key, expiry := range processedLogs {
+		if expiry < now {
+			delete(processedLogs, key)
+		}
+	}
+}
 
 func addTransfer(event *TransferEvent) {
 	windowsMu.Lock()

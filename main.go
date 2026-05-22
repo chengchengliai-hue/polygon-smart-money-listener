@@ -126,6 +126,23 @@ func startListener() error {
 			return fmt.Errorf("subscription error: %w", err)
 
 		case vLog := <-logsCh:
+			// Handle block reorganization: if removed=true, reverse the transfer
+			if vLog.Removed {
+				event := parseTransferLog(vLog)
+				if event != nil {
+					event.ValueUsd = tokenValueToUsd(httpClient, event.Token, event.Value)
+					event.ValueUsd = -event.ValueUsd
+					addTransfer(event)
+					removeProcessedLog(vLog.TxHash.Hex(), vLog.Index)
+				}
+				continue
+			}
+
+			// Dedup: skip already-processed logs
+			if isDuplicate(vLog.TxHash.Hex(), vLog.Index) {
+				continue
+			}
+
 			event := parseTransferLog(vLog)
 			if event == nil {
 				continue
@@ -147,6 +164,7 @@ func startListener() error {
 
 		case <-gcTicker.C:
 			collectGarbage()
+			cleanProcessedLogs()
 
 		case <-windowTicker.C:
 			checkExceededWindows(httpClient)
@@ -189,6 +207,12 @@ func catchUpBlocks(from, to uint64) {
 			continue
 		}
 		for _, vLog := range logs {
+			if vLog.Removed {
+				continue
+			}
+			if isDuplicate(vLog.TxHash.Hex(), vLog.Index) {
+				continue
+			}
 			event := parseTransferLog(vLog)
 			if event != nil {
 				event.ValueUsd = tokenValueToUsd(httpClient, event.Token, event.Value)
