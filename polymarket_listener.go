@@ -23,15 +23,19 @@ var polymarketLastBlock uint64
 
 func startPolymarketListener() {
 	connectPolymarket := func() {
-		backoff := 1 * time.Second
+backoff := 1 * time.Second
 		for {
 			err := runPolymarketListener()
 			if err != nil {
-				log.Printf("[polymarket] error: %v, reconnecting in %v...", err, backoff)
-				time.Sleep(backoff)
-				backoff *= 2
-				if backoff > 60*time.Second {
+				if strings.Contains(err.Error(), "429") {
 					backoff = 60 * time.Second
+				}
+				jitter := time.Duration(float64(backoff) * (0.7 + float64(time.Now().UnixNano()%300)/1000.0))
+				log.Printf("[polymarket] error: %v, reconnecting in %v...", err, jitter.Round(time.Second))
+				time.Sleep(jitter)
+				backoff *= 2
+				if backoff > 120*time.Second {
+					backoff = 120 * time.Second
 				}
 			} else {
 				backoff = 1 * time.Second

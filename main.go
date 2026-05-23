@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"math/rand"
 	"time"
 
 	"github.com/ethereum/go-ethereum"
@@ -60,16 +61,20 @@ func run() {
 	for {
 		err := startListener()
 		if err != nil {
-			log.Printf("[error] %v, reconnecting in %v...", err, backoff)
-			saveRuntimeState("last_processed_block", fmt.Sprintf("%d", lastProcessedBlock))
-			time.Sleep(backoff)
-			// Exponential backoff: 1s → 2s → 4s → 8s → 16s → max 60s
-			backoff *= 2
-			if backoff > 60*time.Second {
+			// Rate limit: jump to max backoff immediately
+			if strings.Contains(err.Error(), "429") {
 				backoff = 60 * time.Second
 			}
+			// Jitter: ±30% to prevent both WS colliding
+			jitter := time.Duration(float64(backoff) * (0.7 + rand.Float64()*0.6))
+			log.Printf("[error] %v, reconnecting in %v...", err, jitter.Round(time.Second))
+			saveRuntimeState("last_processed_block", fmt.Sprintf("%d", lastProcessedBlock))
+			time.Sleep(jitter)
+			backoff *= 2
+			if backoff > 120*time.Second {
+				backoff = 120 * time.Second
+			}
 		} else {
-			// Successful connection, reset backoff
 			backoff = 1 * time.Second
 		}
 	}
