@@ -29,7 +29,7 @@ var httpClient *http.Client
 func loadInformedConfig() {
 	proxyURL := getEnv("HTTP_PROXY", getEnv("HTTPS_PROXY", getEnv("http_proxy", "")))
 	if proxyURL == "" {
-		proxyURL = getEnv("POLYMARKET_PROXY", "http://127.0.0.1:7897")
+		proxyURL = getEnv("POLYMARKET_PROXY", "")
 	}
 
 	informedConfig = InformedConfig{

@@ -54,9 +54,15 @@ func runPolymarketListener() error {
 	}
 	defer httpClient.Close()
 
-	// Get current block
-	header, _ := wsClient.HeaderByNumber(context.Background(), nil)
-	polymarketLastBlock = header.Number.Uint64()
+	// Get current block (with nil check - 1RPC may return nil on error)
+	polymarketLastBlock = 0
+	header, err := wsClient.HeaderByNumber(context.Background(), nil)
+	if err == nil && header != nil {
+		polymarketLastBlock = header.Number.Uint64()
+	}
+	if polymarketLastBlock == 0 {
+		polymarketLastBlock, _ = httpClient.BlockNumber(context.Background())
+	}
 
 	ctfAddr := common.HexToAddress(informedConfig.CtfExchange)
 	negRiskAddr := common.HexToAddress(informedConfig.NegRiskExchange)
