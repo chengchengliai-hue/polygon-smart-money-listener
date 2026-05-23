@@ -247,6 +247,8 @@ func isHighInfoCategory(cat string) bool {
 func normalizeCategory(cat string) string {
 	cat = strings.ToLower(strings.TrimSpace(cat))
 	switch {
+	case strings.Contains(cat, "geo") || strings.Contains(cat, "war") || strings.Contains(cat, "sanction") || strings.Contains(cat, "india") || strings.Contains(cat, "china") || strings.Contains(cat, "uk") || strings.Contains(cat, "france") || strings.Contains(cat, "military"):
+		return "geopolitical"
 	case strings.Contains(cat, "politic") || strings.Contains(cat, "elect"):
 		return "political"
 	case strings.Contains(cat, "fed") || strings.Contains(cat, "cpi") || strings.Contains(cat, "rate") || strings.Contains(cat, "macro") || strings.Contains(cat, "employ") || strings.Contains(cat, "economy") || strings.Contains(cat, "finance"):
@@ -259,8 +261,6 @@ func normalizeCategory(cat string) string {
 		return "crypto_regulatory"
 	case strings.Contains(cat, "entertain") || strings.Contains(cat, "oscar") || strings.Contains(cat, "grammy"):
 		return "entertainment_leak"
-	case strings.Contains(cat, "geo") || strings.Contains(cat, "war") || strings.Contains(cat, "sanction") || strings.Contains(cat, "india") || strings.Contains(cat, "china") || strings.Contains(cat, "uk") || strings.Contains(cat, "france") || strings.Contains(cat, "military"):
-		return "geopolitical"
 	case strings.Contains(cat, "merger") || strings.Contains(cat, "bankrupt") || strings.Contains(cat, "ceo") || strings.Contains(cat, "earning") || strings.Contains(cat, "corp") || strings.Contains(cat, "ipo") || strings.Contains(cat, "business") || strings.Contains(cat, "stock"):
 		return "corporate"
 	case strings.Contains(cat, "ai") || strings.Contains(cat, "chip") || strings.Contains(cat, "release") || strings.Contains(cat, "product") || strings.Contains(cat, "tech"):
