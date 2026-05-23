@@ -3,8 +3,13 @@ package main
 import (
 	"log"
 	"strings"
+	"context"
 	"sync"
 	"time"
+
+	"github.com/ethereum/go-ethereum"
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/ethclient"
 )
 
 var (
@@ -217,9 +222,34 @@ func refreshProxyOwnersFromChain() {
 	}
 }
 
-// discoverProxyForEOA queries Polymarket ProxyFactory for an EOA's proxy
-// v1: stub — will implement via RPC eth_call to ProxyFactory contract
+// Polymarket ProxyFactory address (deploys user proxy wallets)
+var polyProxyFactory = common.HexToAddress("0xaB45c5A4B0c941a2F231C04C3f49182e1A254052")
+
+// ProxyFactory.getProxy(address) function signature
+var getProxySelector = common.HexToHash("0x") // will be filled below
+
+// discoverProxyForEOA queries Polymarket ProxyFactory.getProxy(eoa) via eth_call
 func discoverProxyForEOA(eoa string) string {
-	// TODO: implement via eth_call to Polymarket ProxyFactory.getProxy(eoa)
-	return ""
+	client, err := ethclient.Dial(config.HttpRpcUrl)
+	if err != nil {
+		return ""
+	}
+	defer client.Close()
+
+	// getProxy(address) → 0x64ad1e65 (keccak256 first 4 bytes)
+	selector := common.FromHex("0x64ad1e65")
+	addr := common.HexToAddress(eoa)
+	data := append(selector, common.LeftPadBytes(addr.Bytes(), 32)...)
+
+	to := polyProxyFactory
+	result, err := client.CallContract(context.Background(), ethereum.CallMsg{To: &to, Data: data}, nil)
+	if err != nil || len(result) < 32 {
+		return ""
+	}
+
+	proxy := common.BytesToAddress(result[12:]) // address is right-aligned in 32 bytes
+	if proxy.Hex() == "0x0000000000000000000000000000000000000000" {
+		return ""
+	}
+	return strings.ToLower(proxy.Hex())
 }
