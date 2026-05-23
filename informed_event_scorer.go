@@ -1,8 +1,12 @@
 package main
 
 import (
+	"context"
 	"sync"
 	"time"
+
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/ethclient"
 )
 
 // Entity trade aggregation (key: rootEOA, value: total USD in window)
@@ -130,4 +134,86 @@ func scoreInformedEvent(matched *MatchedTrade) InformedScoredEvent {
 		Severity:     severity,
 		IsHedged:     isHedged,
 	}
+}
+
+// scoreNativeDiscovery checks if a Polymarket trade not in risk pool is suspicious
+// Targets: new wallet (nonce≤1) + high-info market + ≥$5K → potential insider
+func scoreNativeDiscovery(trade *DecodedTrade, client *ethclient.Client) *InformedScoredEvent {
+	// Check maker first, then taker
+	addr := trade.Maker
+	assetID := trade.TakerAssetID
+	role := "maker"
+
+	// If maker is a known address (contract/CEX), try taker
+	if isWhitelisted(addr) {
+		addr = trade.Taker
+		assetID = trade.MakerAssetID
+		role = "taker"
+	}
+
+	// Skip whitelisted
+	if isWhitelisted(addr) {
+		return nil
+	}
+
+	// Check: nonce ≤ 1?
+	nonce := getNonceVal(client, addr)
+	if nonce == nil || *nonce > 1 {
+		return nil
+	}
+
+	// Check: high-information market?
+	tokenOutcome := lookupTokenOutcome(assetID)
+	if tokenOutcome == nil || !isHighInfoCategory(tokenOutcome.Category) {
+		return nil
+	}
+
+	// Check: amount ≥ $5K?
+	amount := trade.TakerAmount
+	if trade.MakerAmount > amount {
+		amount = trade.MakerAmount
+	}
+	if amount < informedConfig.MinTradeUsdc {
+		return nil
+	}
+
+	// All conditions met → Polymarket Native Discovery
+	direction := determineDirection(assetID, "BUY")
+	score := 70 // base: new wallet + high info market + large buy
+	tags := []string{"Polymarket Native Discovery", "Fresh Wallet", "High Information Market", "Large Directional Buy"}
+
+	severity := "normal"
+	if score >= informedConfig.HighThreshold {
+		severity = "high"
+	}
+
+	return &InformedScoredEvent{
+		MatchedTrade: MatchedTrade{
+			DecodedTrade:      *trade,
+			MatchedWallet:     addr,
+			MatchedWalletType: WalletEOA,
+			MatchedRole:       role,
+			RootAddress:       addr,
+			TokenOutcome:      tokenOutcome,
+			Action:            "BUY",
+			Direction:         direction,
+		},
+		RiskScore: score,
+		Tags:      tags,
+		Severity:  severity,
+		IsHedged:  false,
+	}
+}
+
+func getNonceVal(client *ethclient.Client, addr string) *int64 {
+	if client == nil {
+		return nil
+	}
+	address := common.HexToAddress(addr)
+	nonce, err := client.NonceAt(context.Background(), address, nil)
+	if err != nil {
+		return nil
+	}
+	n := int64(nonce)
+	return &n
 }

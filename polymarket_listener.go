@@ -105,14 +105,16 @@ func runPolymarketListener() error {
 
 			// Match maker/funder against risk address set
 			matched := matchTrade(trade)
-			if matched == nil {
-				continue
-			}
-
-			// Score and alert
-			scored := scoreInformedEvent(matched)
-			if scored.RiskScore >= informedConfig.AlertThreshold {
-				outputInformedAlert(scored)
+			if matched != nil {
+				scored := scoreInformedEvent(matched)
+				if scored.RiskScore >= informedConfig.AlertThreshold {
+					outputInformedAlert(scored)
+				}
+			} else {
+				native := scoreNativeDiscovery(trade, httpClient)
+				if native != nil && native.RiskScore >= informedConfig.AlertThreshold {
+					outputInformedAlert(*native)
+				}
 			}
 
 		case <-ticker.C:
