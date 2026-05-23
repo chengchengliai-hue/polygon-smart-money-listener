@@ -127,6 +127,10 @@ func runPolymarketListener() error {
 func matchTrade(trade *DecodedTrade) *MatchedTrade {
 	// Step 1: Check maker
 	entries := lookupRiskWallet(trade.Maker)
+	if len(entries) == 0 {
+		lazyResolveProxy(trade.Maker)
+		entries = lookupRiskWallet(trade.Maker)
+	}
 	if len(entries) > 0 {
 		entry := entries[0] // primary root
 		lw := findMatchedWallet(entry, trade.Maker)
@@ -145,6 +149,10 @@ func matchTrade(trade *DecodedTrade) *MatchedTrade {
 
 	// Step 2: Check taker
 	entries = lookupRiskWallet(trade.Taker)
+	if len(entries) == 0 {
+		lazyResolveProxy(trade.Taker)
+		entries = lookupRiskWallet(trade.Taker)
+	}
 	if len(entries) > 0 {
 		entry := entries[0]
 		lw := findMatchedWallet(entry, trade.Taker)

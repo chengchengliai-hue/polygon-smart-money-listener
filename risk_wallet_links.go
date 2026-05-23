@@ -200,6 +200,79 @@ func startWalletLinkRefresher() {
 }
 
 // refreshProxyOwnersFromChain queries Polymarket ProxyFactory for each risk EOA
+
+// lazyResolveProxy attempts to find the owner of an unknown address in real-time
+// Tries Gnosis Safe owner() and PolyProxy patterns, caches result in proxyOwnerMap
+func lazyResolveProxy(addr string) string {
+	addrLower := strings.ToLower(addr)
+	// Already resolved during this session
+	proxyOwnerMapMu.RLock()
+	if po, ok := proxyOwnerMap[addrLower]; ok {
+		proxyOwnerMapMu.RUnlock()
+		return po.OwnerEOA
+	}
+	proxyOwnerMapMu.RUnlock()
+
+	client, err := ethclient.Dial(config.HttpRpcUrl)
+	if err != nil {
+		return ""
+	}
+	defer client.Close()
+
+	// Try Gnosis Safe owner(): selector = 0x8da5cb5b
+	safeOwner := callOwner(client, addr)
+	if safeOwner != "" && !isWhitelisted(safeOwner) {
+		addProxyOwner(addr, safeOwner)
+		return safeOwner
+	}
+
+	// Try PolyProxy admin/owner: common pattern
+	// PolyProxy typically has owner() with same selector
+	// Already tried above, if empty try admin(): 0xf851a440
+	polyOwner := callAdmin(client, addr)
+	if polyOwner != "" && !isWhitelisted(polyOwner) {
+		addProxyOwner(addr, polyOwner)
+		return polyOwner
+	}
+
+	return ""
+}
+
+// callOwner tries Gnosis Safe/PolyProxy owner() view function
+func callOwner(client *ethclient.Client, proxyAddr string) string {
+	// owner() → 0x8da5cb5b
+	selector := common.FromHex("0x8da5cb5b")
+	to := common.HexToAddress(proxyAddr)
+	data := selector // owner() takes no arguments
+
+	result, err := client.CallContract(context.Background(), ethereum.CallMsg{To: &to, Data: data}, nil)
+	if err != nil || len(result) < 32 {
+		return ""
+	}
+	owner := common.BytesToAddress(result[12:])
+	if owner.Hex() == "0x0000000000000000000000000000000000000000" {
+		return ""
+	}
+	return strings.ToLower(owner.Hex())
+}
+
+// callAdmin tries admin() view function (some PolyProxy contracts)
+func callAdmin(client *ethclient.Client, proxyAddr string) string {
+	// admin() → 0xf851a440
+	selector := common.FromHex("0xf851a440")
+	to := common.HexToAddress(proxyAddr)
+
+	result, err := client.CallContract(context.Background(), ethereum.CallMsg{To: &to, Data: selector}, nil)
+	if err != nil || len(result) < 32 {
+		return ""
+	}
+	admin := common.BytesToAddress(result[12:])
+	if admin.Hex() == "0x0000000000000000000000000000000000000000" {
+		return ""
+	}
+	return strings.ToLower(admin.Hex())
+}
+
 func refreshProxyOwnersFromChain() {
 	riskEoaPoolMu.RLock()
 	eoas := make([]string, 0, len(riskEoaPool))
