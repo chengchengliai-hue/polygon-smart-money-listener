@@ -82,8 +82,8 @@ func refreshMarketsFromChain() {
 				if len(clobIDs) < 2 {
 					continue
 				}
-				yesT := &TokenOutcome{TokenID: clobIDs[0], ConditionID: mkt.ConditionID, MarketSlug: evt.Slug, Question: mkt.Question, Outcome: "YES", OutcomeIndex: 0, Category: cat}
-				noT := &TokenOutcome{TokenID: clobIDs[1], ConditionID: mkt.ConditionID, MarketSlug: evt.Slug, Question: mkt.Question, Outcome: "NO", OutcomeIndex: 1, Category: cat}
+				yesT := &TokenOutcome{TokenID: clobIDs[0], ConditionID: mkt.ConditionID, MarketSlug: evt.Slug, Question: mkt.Question, Outcome: "YES", OutcomeIndex: 0, Category: cat, EndDate: evt.EndDate}
+				noT := &TokenOutcome{TokenID: clobIDs[1], ConditionID: mkt.ConditionID, MarketSlug: evt.Slug, Question: mkt.Question, Outcome: "NO", OutcomeIndex: 1, Category: cat, EndDate: evt.EndDate}
 					newMap[yesT.TokenID] = yesT
 					newMap[noT.TokenID] = noT
 					saveInformedMarket(yesT)

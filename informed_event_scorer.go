@@ -110,7 +110,33 @@ func scoreInformedEvent(matched *MatchedTrade) InformedScoredEvent {
 		tags = append(tags, "Hedged / Arbitrage Pattern")
 	}
 
-	// ── Step 8: Determine severity ──
+	// ── Step 8: Time-correlated funding (whale alert → trade timing) ──
+	hoursSinceAlert := hoursSinceLastWhaleAlert(rootAddr)
+	if hoursSinceAlert >= 0 {
+		if hoursSinceAlert < 2 {
+			score += 25
+			tags = append(tags, "Time-Correlated Funding")
+		} else if hoursSinceAlert < 24 {
+			score += 10
+			tags = append(tags, "Recent Funding")
+		}
+	}
+
+	// ── Step 9: Pre-resolution timing (trade close to market end) ──
+	if matched.TokenOutcome != nil && matched.TokenOutcome.EndDate != "" {
+		hoursToEnd := hoursUntilEnd(matched.TokenOutcome.EndDate)
+		if hoursToEnd >= 0 {
+			if hoursToEnd < 2 {
+				score += 25
+				tags = append(tags, "Imminent Resolution Entry")
+			} else if hoursToEnd < 24 {
+				score += 15
+				tags = append(tags, "Pre-Resolution Timing")
+			}
+		}
+	}
+
+	// ── Step 10: Determine severity ──
 	severity := "watch"
 	if score >= informedConfig.HighThreshold {
 		severity = "high"
@@ -118,7 +144,7 @@ func scoreInformedEvent(matched *MatchedTrade) InformedScoredEvent {
 		severity = "normal"
 	}
 
-	// ── Step 9: GC old aggregation windows ──
+	// ── Step 11: GC old aggregation windows ──
 	rootTradeWindowsMu.Lock()
 	for k, v := range rootTradeWindows {
 		if now.Sub(v.LastSeenAt) > time.Duration(entityWindowSec)*time.Second {
@@ -205,6 +231,51 @@ func scoreNativeDiscovery(trade *DecodedTrade, client *ethclient.Client) *Inform
 	}
 }
 
+// hoursSinceLastWhaleAlert returns hours since the last whale alert for an address.
+// Returns -1 if no alert found.
+func hoursSinceLastWhaleAlert(addr string) float64 {
+	var alertedAt string
+	err := db.QueryRow(
+		`SELECT alerted_at FROM whale_alerts WHERE address = ? ORDER BY alerted_at DESC LIMIT 1`,
+		addr,
+	).Scan(&alertedAt)
+	if err != nil {
+		return -1
+	}
+	t, err := time.Parse("2006-01-02 15:04:05", alertedAt)
+	if err != nil {
+		return -1
+	}
+	return time.Since(t).Hours()
+}
+
+// hoursUntilEnd returns hours until a market end date string (ISO 8601 or similar).
+// Returns -1 if the date is in the past or cannot be parsed.
+func hoursUntilEnd(endDate string) float64 {
+	formats := []string{
+		time.RFC3339,
+		"2006-01-02T15:04:05Z",
+		"2006-01-02 15:04:05",
+		"2006-01-02",
+	}
+	var t time.Time
+	var err error
+	for _, f := range formats {
+		t, err = time.Parse(f, endDate)
+		if err == nil {
+			break
+		}
+	}
+	if err != nil {
+		return -1
+	}
+	delta := t.Sub(time.Now()).Hours()
+	if delta < 0 {
+		return -1 // already ended
+	}
+	return delta
+}
+
 func getNonceVal(client *ethclient.Client, addr string) *int64 {
 	if client == nil {
 		return nil
@@ -217,3 +288,4 @@ func getNonceVal(client *ethclient.Client, addr string) *int64 {
 	n := int64(nonce)
 	return &n
 }
+

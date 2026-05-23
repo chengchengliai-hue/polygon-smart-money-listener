@@ -60,4 +60,3 @@ func detectHedge(matched *MatchedTrade) bool {
 
 	return false
 }
-
