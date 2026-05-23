@@ -1,20 +1,24 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 )
 
-var serverChanKey = ""
+var pushAppToken = ""
+var pushUids []string
 
 func init() {
-	serverChanKey = getEnv("SERVER_CHAN_KEY", "")
+	pushAppToken = getEnv("WXPUSHER_APP_TOKEN", "")
+	if uid := getEnv("WXPUSHER_UID", ""); uid != "" {
+		pushUids = []string{uid}
+	}
 }
 
 func outputInformedAlert(scored InformedScoredEvent) {
@@ -69,41 +73,30 @@ func outputInformedAlert(scored InformedScoredEvent) {
 		},
 	}
 
-	// Output JSON to stdout
+	// Stdout
 	jsonBytes, _ := json.Marshal(alert)
 	fmt.Println(string(jsonBytes))
 
-	// Persist to SQLite
+	// SQLite
 	saveInformedAlert(alert)
 
-	// Push to WeChat via Server酱
-	if serverChanKey != "" {
+	// WxPusher
+	if pushAppToken != "" && len(pushUids) > 0 {
 		pushToWechat(&alert)
 	}
 }
 
 func pushToWechat(alert *InformedEventAlert) {
-	severityEmoji := map[string]string{
-		"high":   "🔴", "normal": "🟡", "watch": "⚪",
-	}
+	severityEmoji := map[string]string{"high": "🔴", "normal": "🟡", "watch": "⚪"}
 
-	title := fmt.Sprintf("%s Polymarket %s: %s",
+	title := fmt.Sprintf("%s [%s] %s → $%.0f",
 		severityEmoji[alert.Severity],
 		alert.Severity,
 		alert.Data.Direction,
+		alert.Data.EstimatedUsdc,
 	)
 
-	content := fmt.Sprintf(`市场: %s
-类别: %s
-钱包: %s
-匹配地址: %s (%s)
-角色: %s
-下注: $%.0f USDC
-方向: %s %s
-分数: %d
-标签: %s
-时间: %s
-`,
+	body := fmt.Sprintf("市场: %s\n类别: %s\n钱包: %s\n匹配: %s(%s)\n角色: %s\n金额: $%.0f USDC\n方向: %s %s\n分数: %d\n标签: %s\n%s",
 		alert.Data.MarketQuestion,
 		alert.Data.EventCategory,
 		alert.Data.RootWalletAddress,
@@ -118,15 +111,25 @@ func pushToWechat(alert *InformedEventAlert) {
 		alert.Data.DetectedAt,
 	)
 
-	resp, err := http.PostForm(
-		fmt.Sprintf("https://sc.ftqq.com/%s.send", serverChanKey),
-		url.Values{"text": {title}, "desp": {content}},
+	payload := map[string]interface{}{
+		"appToken":    pushAppToken,
+		"content":     body,
+		"summary":     title,
+		"contentType": 1,
+		"uids":        pushUids,
+	}
+
+	jsonPayload, _ := json.Marshal(payload)
+	resp, err := http.Post(
+		"https://wxpusher.zjiecode.com/api/send/message",
+		"application/json",
+		bytes.NewReader(jsonPayload),
 	)
 	if err != nil {
-		log.Printf("[wechat] push failed: %v", err)
+		log.Printf("[wxpush] failed: %v", err)
 		return
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-	log.Printf("[wechat] pushed: %s", string(body)[:100])
+	respBody, _ := io.ReadAll(resp.Body)
+	log.Printf("[wxpush] sent: %s", string(respBody)[:100])
 }
