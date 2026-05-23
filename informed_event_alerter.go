@@ -142,10 +142,14 @@ func pushToTelegram(alert *InformedEventAlert) {
 		beijing,
 	)
 
-	resp, err := http.Get(fmt.Sprintf(
-		"https://api.telegram.org/bot%s/sendMessage?chat_id=%s&text=%s",
-		tgBotToken, tgChatID, url.QueryEscape(text),
-	))
+	// Build inline keyboard with smart money button
+	payload := fmt.Sprintf(`{"chat_id":"%s","text":"%s","parse_mode":"HTML","reply_markup":"{\"inline_keyboard\":[[{\"text\":\"💡 聪明钱报警\",\"callback_data\":\"smart_money\"},{\"text\":\"🔗 Polygonscan\",\"url\":\"https://polygonscan.com/address/%s\"}]]}"}`,
+		tgChatID, url.QueryEscape(text), alert.Data.RootWalletAddress)
+	resp, err := http.Post(
+		fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", tgBotToken),
+		"application/json",
+		strings.NewReader(payload),
+	)
 	if err != nil {
 		log.Printf("[tg] push failed: %v", err)
 		return
