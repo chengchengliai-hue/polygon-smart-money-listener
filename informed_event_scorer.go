@@ -163,7 +163,7 @@ func scoreInformedEvent(matched *MatchedTrade) InformedScoredEvent {
 }
 
 // scoreNativeDiscovery checks if a Polymarket trade not in risk pool is suspicious
-// Targets: new wallet (nonce≤1) + high-info market + ≥$5K → potential insider
+// Targets: new wallet (nonce≤5, accounts for approve+deposit overhead) + high-info market + ≥$5K → potential insider
 func scoreNativeDiscovery(trade *DecodedTrade, client *ethclient.Client) *InformedScoredEvent {
 	// Check maker first, then taker
 	addr := trade.Maker
@@ -182,9 +182,9 @@ func scoreNativeDiscovery(trade *DecodedTrade, client *ethclient.Client) *Inform
 		return nil
 	}
 
-	// Check: nonce ≤ 1?
+	// Check: nonce ≤ 3? (accounts for approve+deposit+trade overhead on fresh wallets)
 	nonce := getNonceVal(client, addr)
-	if nonce == nil || *nonce > 1 {
+	if nonce == nil || *nonce > 3 {
 		return nil
 	}
 

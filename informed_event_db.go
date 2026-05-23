@@ -118,11 +118,13 @@ func loadWhaleAddresses() []RiskWalletEntry {
 
 func saveRiskWalletLink(linkedAddr, rootAddr string, wType WalletType, source string, score int, tags []string) {
 	tagsJson, _ := json.Marshal(tags)
+	dbWriteMu.Lock()
 	db.Exec(
 		`INSERT OR REPLACE INTO risk_wallet_links (linked_address, root_address, wallet_type, source, risk_score, tags, last_verified_at)
 		 VALUES (?, ?, ?, ?, ?, ?, datetime('now'))`,
 		linkedAddr, rootAddr, string(wType), source, score, string(tagsJson),
 	)
+	dbWriteMu.Unlock()
 }
 
 func isPolymarketEventSeen(eventKey string) bool {
@@ -132,18 +134,22 @@ func isPolymarketEventSeen(eventKey string) bool {
 }
 
 func markPolymarketEventSeen(eventKey, txHash string, logIndex uint, blockNumber uint64) {
+	dbWriteMu.Lock()
 	db.Exec(
 		"INSERT OR IGNORE INTO polymarket_events_seen (event_key, tx_hash, log_index, block_number) VALUES (?, ?, ?, ?)",
 		eventKey, txHash, logIndex, blockNumber,
 	)
+	dbWriteMu.Unlock()
 }
 
 func saveWalletConditionActivity(rootAddr, conditionID, outcome, action, txHash string, estimatedUsdc float64, blockNumber uint64) {
+	dbWriteMu.Lock()
 	db.Exec(
 		`INSERT INTO wallet_condition_activity (root_address, condition_id, outcome, action, estimated_usdc, tx_hash, block_number)
 		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		rootAddr, conditionID, outcome, action, estimatedUsdc, txHash, blockNumber,
 	)
+	dbWriteMu.Unlock()
 }
 
 func saveInformedAlert(alert InformedEventAlert) {
@@ -151,6 +157,7 @@ func saveInformedAlert(alert InformedEventAlert) {
 		return
 	}
 	tagsJson, _ := json.Marshal(alert.Data.Tags)
+	dbWriteMu.Lock()
 	db.Exec(
 		`INSERT INTO informed_event_alerts (root_address, matched_address, matched_wallet_type, condition_id, token_id, outcome, action, category, estimated_usdc, score, severity, tags, tx_hash, log_index, block_number)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -159,6 +166,7 @@ func saveInformedAlert(alert InformedEventAlert) {
 		alert.Data.EventCategory, alert.Data.EstimatedUsdc, alert.Data.RiskScore, alert.Severity,
 		string(tagsJson), alert.Data.TxHash, alert.Data.LogIndex, alert.Data.BlockNumber,
 	)
+	dbWriteMu.Unlock()
 }
 
 func getWalletConditionHistory(rootAddr, conditionID string, windowSeconds int) []struct {

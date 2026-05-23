@@ -197,6 +197,22 @@ func startWalletLinkRefresher() {
 			refreshProxyOwnersFromChain()
 		}
 	}()
+
+	// proxyOwnerMap GC: purge entries older than 7 days to prevent OOM
+	go func() {
+		ticker := time.NewTicker(1 * time.Hour)
+		defer ticker.Stop()
+		for range ticker.C {
+			proxyOwnerMapMu.Lock()
+			cutoff := time.Now().Unix() - 7*24*3600
+			for k, v := range proxyOwnerMap {
+				if v.LastUpdated < cutoff {
+					delete(proxyOwnerMap, k)
+				}
+			}
+			proxyOwnerMapMu.Unlock()
+		}
+	}()
 }
 
 // refreshProxyOwnersFromChain queries Polymarket ProxyFactory for each risk EOA

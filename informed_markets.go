@@ -271,11 +271,13 @@ func normalizeCategory(cat string) string {
 }
 
 func saveInformedMarket(t *TokenOutcome) {
+	dbWriteMu.Lock()
 	db.Exec(
 		`INSERT OR REPLACE INTO informed_markets (token_id, condition_id, market_slug, question, outcome, outcome_index, category, liquidity, volume, end_date, updated_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
 		t.TokenID, t.ConditionID, t.MarketSlug, t.Question, t.Outcome, t.OutcomeIndex, t.Category, t.Liquidity, t.Volume, t.EndDate,
 	)
+	dbWriteMu.Unlock()
 }
 
 

@@ -5,15 +5,17 @@ import (
 	"encoding/json"
 	"log"
 	"strings"
+	"sync"
 
 	_ "github.com/mattn/go-sqlite3"
 )
 
 var db *sql.DB
+var dbWriteMu sync.Mutex
 
 func initDB() {
 	var err error
-	db, err = sql.Open("sqlite3", config.SqlitePath)
+	db, err = sql.Open("sqlite3", config.SqlitePath+"?_journal_mode=WAL&_busy_timeout=5000")
 	if err != nil {
 		log.Fatalf("[db] open: %v", err)
 	}
@@ -71,18 +73,22 @@ func markAddressSeen(address string, blockNumber uint64, nonce *int64, isContrac
 	if nonce != nil {
 		nonceVal = *nonce
 	}
+	dbWriteMu.Lock()
 	_, _ = db.Exec(
 		"INSERT OR IGNORE INTO seen_addresses (address, first_seen_block, nonce_last_checked, is_contract) VALUES (?, ?, ?, ?)",
 		strings.ToLower(address), blockNumber, nonceVal, contractVal,
 	)
+	dbWriteMu.Unlock()
 }
 
 func saveWhaleAlert(address, primaryFunder string, totalUsd float64, score int, severity string, tags []string) {
 	tagsJson, _ := json.Marshal(tags)
+	dbWriteMu.Lock()
 	_, _ = db.Exec(
 		"INSERT INTO whale_alerts (address, primary_funder_address, total_usd, score, severity, tags) VALUES (?, ?, ?, ?, ?, ?)",
 		strings.ToLower(address), strings.ToLower(primaryFunder), totalUsd, score, severity, string(tagsJson),
 	)
+	dbWriteMu.Unlock()
 }
 
 func isWhaleAlerted(address string) bool {
@@ -95,7 +101,9 @@ func isWhaleAlerted(address string) bool {
 }
 
 func saveRuntimeState(key, value string) {
+	dbWriteMu.Lock()
 	_, _ = db.Exec("INSERT OR REPLACE INTO runtime_state (key, value) VALUES (?, ?)", key, value)
+	dbWriteMu.Unlock()
 }
 
 func getRuntimeState(key string) string {
