@@ -1,24 +1,22 @@
 package main
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
 
-var pushAppToken = ""
-var pushUids []string
+var tgBotToken = ""
+var tgChatID = ""
 
 func init() {
-	pushAppToken = getEnv("WXPUSHER_APP_TOKEN", "")
-	if uid := getEnv("WXPUSHER_UID", ""); uid != "" {
-		pushUids = []string{uid}
-	}
+	tgBotToken = getEnv("TG_BOT_TOKEN", "")
+	tgChatID = getEnv("TG_CHAT_ID", "")
 }
 
 func outputInformedAlert(scored InformedScoredEvent) {
@@ -73,37 +71,28 @@ func outputInformedAlert(scored InformedScoredEvent) {
 		},
 	}
 
-	// Stdout
 	jsonBytes, _ := json.Marshal(alert)
 	fmt.Println(string(jsonBytes))
-
-	// SQLite
 	saveInformedAlert(alert)
 
-	// WxPusher
-	if pushAppToken != "" && len(pushUids) > 0 {
-		pushToWechat(&alert)
+	if tgBotToken != "" && tgChatID != "" {
+		pushToTelegram(&alert)
 	}
 }
 
-func pushToWechat(alert *InformedEventAlert) {
-	severityEmoji := map[string]string{"high": "🔴", "normal": "🟡", "watch": "⚪"}
+func pushToTelegram(alert *InformedEventAlert) {
+	emoji := map[string]string{"high": "\xF0\x9F\x94\xB4", "normal": "\xF0\x9F\x9F\xA1", "watch": "\xE2\x9A\xAA"}
 
-	title := fmt.Sprintf("%s [%s] %s → $%.0f",
-		severityEmoji[alert.Severity],
+	text := fmt.Sprintf("%s Polymarket %s, $%.0f\n\nMarket: %s\nCategory: %s\nWallet: %s\nMatched: %s (%s)\nRole: %s\nDirection: %s %s\nScore: %d\nTags: %s\nTime: %s",
+		emoji[alert.Severity],
 		alert.Severity,
-		alert.Data.Direction,
 		alert.Data.EstimatedUsdc,
-	)
-
-	body := fmt.Sprintf("市场: %s\n类别: %s\n钱包: %s\n匹配: %s(%s)\n角色: %s\n金额: $%.0f USDC\n方向: %s %s\n分数: %d\n标签: %s\n%s",
 		alert.Data.MarketQuestion,
 		alert.Data.EventCategory,
 		alert.Data.RootWalletAddress,
 		alert.Data.MatchedWalletAddress,
 		alert.Data.MatchedWalletType,
 		alert.Data.MatchedRole,
-		alert.Data.EstimatedUsdc,
 		alert.Data.Action,
 		alert.Data.Outcome,
 		alert.Data.RiskScore,
@@ -111,25 +100,15 @@ func pushToWechat(alert *InformedEventAlert) {
 		alert.Data.DetectedAt,
 	)
 
-	payload := map[string]interface{}{
-		"appToken":    pushAppToken,
-		"content":     body,
-		"summary":     title,
-		"contentType": 1,
-		"uids":        pushUids,
-	}
-
-	jsonPayload, _ := json.Marshal(payload)
-	resp, err := http.Post(
-		"https://wxpusher.zjiecode.com/api/send/message",
-		"application/json",
-		bytes.NewReader(jsonPayload),
-	)
+	resp, err := http.Get(fmt.Sprintf(
+		"https://api.telegram.org/bot%s/sendMessage?chat_id=%s&text=%s",
+		tgBotToken, tgChatID, url.QueryEscape(text),
+	))
 	if err != nil {
-		log.Printf("[wxpush] failed: %v", err)
+		log.Printf("[tg] push failed: %v", err)
 		return
 	}
 	defer resp.Body.Close()
-	respBody, _ := io.ReadAll(resp.Body)
-	log.Printf("[wxpush] sent: %s", string(respBody)[:100])
+	body, _ := io.ReadAll(resp.Body)
+	log.Printf("[tg] pushed: %s", string(body)[:80])
 }
