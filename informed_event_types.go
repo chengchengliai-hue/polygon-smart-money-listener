@@ -140,16 +140,16 @@ type GammaEvent struct {
 }
 
 type GammaTag struct {
-	ID    int    `json:"id"`
+	ID    string `json:"id"`
 	Label string `json:"label"`
 	Slug  string `json:"slug"`
 }
 
 type GammaMarket struct {
-	ID            string `json:"id"`
-	Question      string `json:"question"`
-	ConditionID   string `json:"condition_id"`
-	OutcomesRaw   string `json:"outcomes"`
-	OutcomePricesRaw string `json:"outcome_prices"`
-	ClobTokenIDsRaw   string `json:"clob_token_ids"`
+	ID               string `json:"id"`
+	Question         string `json:"question"`
+	ConditionID      string `json:"conditionId"`
+	OutcomesRaw      string `json:"outcomes"`
+	OutcomePricesRaw string `json:"outcomePrices"`
+	ClobTokenIDsRaw  string `json:"clobTokenIds"`
 }
