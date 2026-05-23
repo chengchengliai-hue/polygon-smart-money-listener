@@ -10,7 +10,7 @@ Go 编写的 Polygon 链上智能风控系统，双模块并行运行：
 ## 架构总览
 
 ```
-Polygon WebSocket (Infura, 1 条连接)
+Polygon WebSocket (Infura, 2 WS: 巨鲸+Polymarket)
     │
     ├── USDT/USDC Transfer 事件 ──→ 巨鲸监听模块
     │        │
@@ -32,7 +32,7 @@ Polygon WebSocket (Infura, 1 条连接)
 共享模块:
   ├── risk_wallet_links: 风险钱包池(白名单过滤/多根/30天TTL)
   ├── informed_markets: Gamma API 市场缓存(2796 token)
-  ├── WxPusher推送: 聪明钱报警实时推送
+  ├── Telegram推送: 聪明钱报警实时推送
   └── SQLite 9张表
 ```
 
@@ -112,7 +112,7 @@ INFORMED_ALERT_THRESHOLD=70
 INFORMED_MIN_TRADE_USDC=5000
 HEDGE_PENALTY=-50
 
-# Telegram (WxPusher)
+# Telegram (Telegram)
 TG_BOT_TOKEN=your_bot_token
 TG_CHAT_ID=your_chat_id
 ```
