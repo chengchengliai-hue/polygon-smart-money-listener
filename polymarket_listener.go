@@ -42,13 +42,13 @@ func startPolymarketListener() {
 }
 
 func runPolymarketListener() error {
-	wsClient, err := ethclient.Dial("wss://1rpc.io/matic")
+	wsClient, err := ethclient.Dial(config.WsRpcUrl)
 	if err != nil {
 		return fmt.Errorf("polymarket ws: %w", err)
 	}
 	defer wsClient.Close()
 
-	httpClient, err := ethclient.Dial("https://1rpc.io/matic")
+	httpClient, err := ethclient.Dial(config.HttpRpcUrl)
 	if err != nil {
 		return fmt.Errorf("polymarket http: %w", err)
 	}
