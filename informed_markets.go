@@ -132,12 +132,12 @@ func refreshFromRecentTrades() {
 	}
 	defer client.Close()
 
-	riskAddressSetMu.RLock()
-	addrs := make([]string, 0, len(riskAddressSet))
-	for _, entry := range riskAddressSet {
-		addrs = append(addrs, entry.RootAddress)
+	allLinkedAddressesMu.RLock()
+	addrs := make([]string, 0, len(riskEoaPool))
+	for _, entry := range riskEoaPool {
+		addrs = append(addrs, entry.RootAddresses[0])
 	}
-	riskAddressSetMu.RUnlock()
+	allLinkedAddressesMu.RUnlock()
 
 	if len(addrs) == 0 {
 		return

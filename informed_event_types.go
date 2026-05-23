@@ -1,51 +1,46 @@
 package main
 
-// ═══════════════════════════════════════════
-// Wallet linking
-// ═══════════════════════════════════════════
-
 type WalletType string
 
 const (
-	WalletEOA            WalletType = "EOA"
-	WalletPolyProxy      WalletType = "POLY_PROXY"
-	WalletGnosisSafe     WalletType = "GNOSIS_SAFE"
-	WalletDeposit        WalletType = "DEPOSIT_WALLET"
-	WalletSessionSigner  WalletType = "SESSION_SIGNER"
+	WalletEOA           WalletType = "EOA"
+	WalletPolyProxy     WalletType = "POLY_PROXY"
+	WalletGnosisSafe    WalletType = "GNOSIS_SAFE"
+	WalletDeposit       WalletType = "DEPOSIT_WALLET"
+	WalletSessionSigner WalletType = "SESSION_SIGNER"
 )
 
 type LinkedWallet struct {
-	Address    string     `json:"address"`
-	Type       WalletType `json:"type"`
+	Address string     `json:"address"`
+	Type    WalletType `json:"type"`
+}
+
+type ProxyOwner struct {
+	ProxyAddress string `json:"proxy_address"`
+	OwnerEOA     string `json:"owner_eoa"`
+	LastUpdated  int64  `json:"last_updated"`
 }
 
 type RiskWalletEntry struct {
-	RootAddress    string         `json:"root_eoa"`
-	RiskScore      int            `json:"risk_score"`
-	LinkedWallets  []LinkedWallet `json:"linked_addresses"`
-	Tags           []string       `json:"tags"`
+	RootAddresses []string       `json:"root_eoas"`
+	RiskScore     int            `json:"risk_score"`
+	LinkedWallets []LinkedWallet `json:"linked_addresses"`
+	Tags          []string       `json:"tags"`
+	LastActive    int64          `json:"last_active"`
 }
-
-// ═══════════════════════════════════════════
-// Token outcome mapping
-// ═══════════════════════════════════════════
 
 type TokenOutcome struct {
-	TokenID      string `json:"token_id"`
-	ConditionID  string `json:"condition_id"`
-	MarketSlug   string `json:"market_slug"`
-	Question     string `json:"market_question"`
-	Outcome      string `json:"outcome"`
-	OutcomeIndex int    `json:"outcome_index"`
-	Category     string `json:"event_category"`
+	TokenID      string  `json:"token_id"`
+	ConditionID  string  `json:"condition_id"`
+	MarketSlug   string  `json:"market_slug"`
+	Question     string  `json:"market_question"`
+	Outcome      string  `json:"outcome"`
+	OutcomeIndex int     `json:"outcome_index"`
+	Category     string  `json:"event_category"`
 	Liquidity    float64 `json:"liquidity"`
 	Volume       float64 `json:"volume"`
-	EndDate      string `json:"end_date"`
+	EndDate      string  `json:"end_date"`
 }
-
-// ═══════════════════════════════════════════
-// Decoded Polymarket trade
-// ═══════════════════════════════════════════
 
 type DecodedTrade struct {
 	TxHash       string
@@ -61,10 +56,6 @@ type DecodedTrade struct {
 	Fee          float64
 }
 
-// ═══════════════════════════════════════════
-// Matched informed event
-// ═══════════════════════════════════════════
-
 type MatchedTrade struct {
 	DecodedTrade
 	MatchedWallet     string
@@ -72,13 +63,9 @@ type MatchedTrade struct {
 	MatchedRole       string
 	RootAddress       string
 	TokenOutcome      *TokenOutcome
-	Action            string // BUY / SELL
-	Direction         string // bullish_yes / bearish_yes / unknown
+	Action            string
+	Direction         string
 }
-
-// ═══════════════════════════════════════════
-// Scored informed event
-// ═══════════════════════════════════════════
 
 type InformedScoredEvent struct {
 	MatchedTrade
@@ -88,18 +75,14 @@ type InformedScoredEvent struct {
 	IsHedged  bool
 }
 
-// ═══════════════════════════════════════════
-// Alert output
-// ═══════════════════════════════════════════
-
 type InformedEventAlert struct {
-	SchemaVersion   string              `json:"schema_version"`
-	EventType       string              `json:"event_type"`
-	Severity        string              `json:"severity"`
-	ConfidenceLevel string              `json:"confidence_level"`
-	Chain           string              `json:"chain"`
-	Source          string              `json:"source"`
-	Data            InformedEventData   `json:"data"`
+	SchemaVersion   string            `json:"schema_version"`
+	EventType       string            `json:"event_type"`
+	Severity        string            `json:"severity"`
+	ConfidenceLevel string            `json:"confidence_level"`
+	Chain           string            `json:"chain"`
+	Source          string            `json:"source"`
+	Data            InformedEventData `json:"data"`
 }
 
 type InformedEventData struct {
@@ -125,8 +108,6 @@ type InformedEventData struct {
 	DetectedAt           string   `json:"detected_at"`
 }
 
-
-// Gamma API market (re-enabled with proxy support)
 type GammaEvent struct {
 	ID        string        `json:"id"`
 	Title     string        `json:"title"`

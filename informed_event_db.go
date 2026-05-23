@@ -3,6 +3,7 @@ package main
 import (
 	"database/sql"
 	"encoding/json"
+	"time"
 )
 
 func initInformedTables(db *sql.DB) {
@@ -76,9 +77,9 @@ func initInformedTables(db *sql.DB) {
 
 func loadWhaleAddresses() []RiskWalletEntry {
 	rows, err := db.Query(`
-		SELECT address, score, tags FROM whale_alerts
-		WHERE score >= 70
-		ORDER BY score DESC LIMIT 500
+		SELECT a.address, a.score, a.tags, 
+		       COALESCE((SELECT MAX(alerted_at) FROM whale_alerts WHERE address = a.address), datetime('now')) as last_active
+		FROM (SELECT DISTINCT address, score, tags FROM whale_alerts WHERE score >= 70 ORDER BY score DESC LIMIT 500) a
 	`)
 	if err != nil {
 		return nil
@@ -90,15 +91,23 @@ func loadWhaleAddresses() []RiskWalletEntry {
 		var addr string
 		var score int
 		var tagsJson string
-		rows.Scan(&addr, &score, &tagsJson)
+		var lastActive string
+		rows.Scan(&addr, &score, &tagsJson, &lastActive)
 
 		var tags []string
 		json.Unmarshal([]byte(tagsJson), &tags)
 
+		// Parse last active to unix timestamp for TTL
+		lastActiveUnix := int64(0)
+		if t, err := time.Parse("2006-01-02 15:04:05", lastActive); err == nil {
+			lastActiveUnix = t.Unix()
+		}
+
 		results = append(results, RiskWalletEntry{
-			RootAddress: addr,
-			RiskScore:   score,
-			Tags:        tags,
+			RootAddresses: []string{addr},
+			RiskScore:     score,
+			Tags:          tags,
+			LastActive:    lastActiveUnix,
 			LinkedWallets: []LinkedWallet{
 				{Address: addr, Type: WalletEOA},
 			},

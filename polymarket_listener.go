@@ -123,34 +123,36 @@ func runPolymarketListener() error {
 
 // matchTrade checks if maker or taker is in the risk address set
 func matchTrade(trade *DecodedTrade) *MatchedTrade {
-	// Check funder/taker wallet against risk pool
-	// makerAssetId tells what the maker PAID → the maker RECEIVED takerAssetId
-	// takerAssetId tells what the taker PAID → the taker RECEIVED makerAssetId
-
-	// Check maker
-	if entry := lookupRiskWallet(trade.Maker); entry != nil {
+	// Step 1: Check maker
+	entries := lookupRiskWallet(trade.Maker)
+	if len(entries) > 0 {
+		entry := entries[0] // primary root
 		lw := findMatchedWallet(entry, trade.Maker)
+		rootAddr := entry.RootAddresses[0]
 		return &MatchedTrade{
 			DecodedTrade:      *trade,
 			MatchedWallet:     lw.Address,
 			MatchedWalletType: lw.Type,
 			MatchedRole:       "maker",
-			RootAddress:       entry.RootAddress,
+			RootAddress:       rootAddr,
 			TokenOutcome:      lookupTokenOutcome(trade.TakerAssetID),
 			Action:            "BUY",
 			Direction:         determineDirection(trade.TakerAssetID, "BUY"),
 		}
 	}
 
-	// Check taker
-	if entry := lookupRiskWallet(trade.Taker); entry != nil {
+	// Step 2: Check taker
+	entries = lookupRiskWallet(trade.Taker)
+	if len(entries) > 0 {
+		entry := entries[0]
 		lw := findMatchedWallet(entry, trade.Taker)
+		rootAddr := entry.RootAddresses[0]
 		return &MatchedTrade{
 			DecodedTrade:      *trade,
 			MatchedWallet:     lw.Address,
 			MatchedWalletType: lw.Type,
 			MatchedRole:       "taker",
-			RootAddress:       entry.RootAddress,
+			RootAddress:       rootAddr,
 			TokenOutcome:      lookupTokenOutcome(trade.MakerAssetID),
 			Action:            "BUY",
 			Direction:         determineDirection(trade.MakerAssetID, "BUY"),
@@ -161,6 +163,7 @@ func matchTrade(trade *DecodedTrade) *MatchedTrade {
 }
 
 func findMatchedWallet(entry *RiskWalletEntry, addr string) LinkedWallet {
+	if entry == nil { return LinkedWallet{Address: addr, Type: WalletEOA} }
 	lower := strings.ToLower(addr)
 	for _, lw := range entry.LinkedWallets {
 		if strings.ToLower(lw.Address) == lower {

@@ -60,7 +60,7 @@ func scoreAddress(win *AddressWindow, nonce *int64, isContract bool) ScoredAddre
 	}
 
 	// Known CEX hot wallet → -20
-	if knownCex[strings.ToLower(primaryFunder)] {
+	if isWhitelisted(strings.ToLower(primaryFunder)) {
 		fromKnownCex = true
 		score -= 20
 		tags = append(tags, "CEX Withdrawal")

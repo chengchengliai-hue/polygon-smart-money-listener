@@ -8,128 +8,218 @@ import (
 )
 
 var (
-	riskAddressSet   = make(map[string]*RiskWalletEntry) // key: linked address (lowercase)
-	riskAddressSetMu sync.RWMutex
+	// Table A: Proxy → current Owner EOA (real-time, event-driven)
+	proxyOwnerMap   = make(map[string]*ProxyOwner)
+	proxyOwnerMapMu sync.RWMutex
+
+	// Table B: Risk EOA Pool (from whale_alerts, with TTL)
+	riskEoaPool   = make(map[string]*RiskWalletEntry)
+	riskEoaPoolMu sync.RWMutex
+
+	// Cache: all linked addresses → risk entries (multi-root)
+	allLinkedAddresses   = make(map[string][]*RiskWalletEntry)
+	allLinkedAddressesMu sync.RWMutex
 )
 
-// Maps all linked addresses (EOA, Proxy, Safe, Deposit) → root entry
-// O(1) lookup by any linked address
+// ═══════════════════════════════════════════
+// Table A: Proxy → Owner mapping
+// ═══════════════════════════════════════════
 
-func refreshRiskWalletLinks() {
+func addProxyOwner(proxy, owner string) {
+	proxyOwnerMapMu.Lock()
+	proxyOwnerMap[strings.ToLower(proxy)] = &ProxyOwner{
+		ProxyAddress: strings.ToLower(proxy),
+		OwnerEOA:     strings.ToLower(owner),
+		LastUpdated:  time.Now().Unix(),
+	}
+	proxyOwnerMapMu.Unlock()
+}
+
+func getProxyOwner(proxy string) string {
+	proxyOwnerMapMu.RLock()
+	defer proxyOwnerMapMu.RUnlock()
+	entry := proxyOwnerMap[strings.ToLower(proxy)]
+	if entry == nil {
+		return ""
+	}
+	return entry.OwnerEOA
+}
+
+// ═══════════════════════════════════════════
+// Table B: Risk EOA Pool
+// ═══════════════════════════════════════════
+
+const riskTTL = 30 * 24 * 3600 // 30 days
+
+func refreshRiskPool() {
 	entries := loadWhaleAddresses()
-	riskAddressSetMu.Lock()
-	defer riskAddressSetMu.Unlock()
+	now := time.Now().Unix()
 
-	newSet := make(map[string]*RiskWalletEntry)
+	riskEoaPoolMu.Lock()
+	newPool := make(map[string]*RiskWalletEntry)
+	newLinked := make(map[string][]*RiskWalletEntry)
+	riskEoaPoolMu.Unlock()
 
 	for _, entry := range entries {
-		// EOA is always linked
-		entry.LinkedWallets = []LinkedWallet{
-			{Address: entry.RootAddress, Type: WalletEOA},
-		}
-		newSet[strings.ToLower(entry.RootAddress)] = &entry
-
-		// Try to discover linked wallets (Proxy, Safe, Deposit)
-		linked := discoverLinkedWallets(entry.RootAddress)
-		for _, lw := range linked {
-			entry.LinkedWallets = append(entry.LinkedWallets, lw)
-			newSet[strings.ToLower(lw.Address)] = &entry
+		// Filter: skip whitelisted (CEX/DEX/Bridge/Mixer)
+		if isWhitelisted(strings.ToLower(entry.RootAddresses[0])) {
+			continue
 		}
 
-		// Persist links
-		for _, lw := range entry.LinkedWallets {
-			saveRiskWalletLink(lw.Address, entry.RootAddress, lw.Type, "auto", entry.RiskScore, entry.Tags)
+		// TTL check: skip expired
+		if entry.LastActive > 0 && now-entry.LastActive > riskTTL {
+			log.Printf("[wallet] expired: %s (inactive %d days)", entry.RootAddresses[0][:14], (now-entry.LastActive)/86400)
+			continue
 		}
-	}
 
-	riskAddressSet = newSet
-	log.Printf("[wallet-links] loaded %d root wallets, %d total linked addresses", len(entries), len(newSet))
-}
+		eoa := strings.ToLower(entry.RootAddresses[0])
+		newPool[eoa] = &entry
 
-// discoverLinkedWallets attempts to find Proxy/Safe/Deposit wallets for an EOA
-func discoverLinkedWallets(eoa string) []LinkedWallet {
-	var linked []LinkedWallet
-	addr := strings.ToLower(eoa)
+		// Add EOA itself to linked map
+		newLinked[eoa] = append(newLinked[eoa], &entry)
 
-	// 1. Check DB labels for this exact address
-	label := getAddressLabel(addr)
-	switch label {
-	case "polymarket_proxy":
-		linked = append(linked, LinkedWallet{Address: addr, Type: WalletPolyProxy})
-	case "gnosis_safe":
-		linked = append(linked, LinkedWallet{Address: addr, Type: WalletGnosisSafe})
-	case "polymarket_deposit":
-		linked = append(linked, LinkedWallet{Address: addr, Type: WalletDeposit})
-	}
-
-	// 2. Query whale_alerts: add primary funders of THIS address as linked wallets
-	// If a whale address was funded by a known proxy/Safe, add it too
-	func() {
-		rows, err := db.Query(
-			`SELECT DISTINCT primary_funder_address FROM whale_alerts WHERE address = ?`,
-			addr,
-		)
-		if err != nil {
-			return
-		}
-		defer rows.Close()
-		for rows.Next() {
-			var funder string
-			rows.Scan(&funder)
-			if funder != "" && strings.ToLower(funder) != addr {
-				fLabel := getAddressLabel(strings.ToLower(funder))
-				fType := WalletEOA
-				switch fLabel {
-				case "polymarket_proxy":
-					fType = WalletPolyProxy
-				case "gnosis_safe":
-					fType = WalletGnosisSafe
-				case "polymarket_deposit":
-					fType = WalletDeposit
+		// Add from whale_alerts funder/funded links (filtered by whitelist)
+		func() {
+			rows, err := db.Query(`SELECT DISTINCT primary_funder_address FROM whale_alerts WHERE address = ?`, eoa)
+			if err != nil {
+				return
+			}
+			defer rows.Close()
+			for rows.Next() {
+				var funder string
+				rows.Scan(&funder)
+				funder = strings.ToLower(funder)
+				if funder != "" && funder != eoa && !isWhitelisted(funder) {
+					newLinked[funder] = append(newLinked[funder], &entry)
 				}
-				linked = append(linked, LinkedWallet{Address: funder, Type: fType})
+			}
+		}()
+
+		func() {
+			rows, err := db.Query(`SELECT DISTINCT address FROM whale_alerts WHERE primary_funder_address = ?`, eoa)
+			if err != nil {
+				return
+			}
+			defer rows.Close()
+			for rows.Next() {
+				var funded string
+				rows.Scan(&funded)
+				funded = strings.ToLower(funded)
+				if funded != "" && funded != eoa && !isWhitelisted(funded) {
+					newLinked[funded] = append(newLinked[funded], &entry)
+				}
+			}
+		}()
+
+		// Discover Proxy addresses for this EOA (from local cache)
+		proxyOwnerMapMu.RLock()
+		for proxy, po := range proxyOwnerMap {
+			if po.OwnerEOA == eoa {
+				newLinked[proxy] = append(newLinked[proxy], &entry)
 			}
 		}
-	}()
+		proxyOwnerMapMu.RUnlock()
+	}
 
-	// 3. Also add addresses that THIS whale funded (potential proxy outflows)
-	func() {
-		rows, err := db.Query(
-			`SELECT DISTINCT address FROM whale_alerts WHERE primary_funder_address = ?`,
-			addr,
-		)
-		if err != nil {
-			return
-		}
-		defer rows.Close()
-		for rows.Next() {
-			var funded string
-			rows.Scan(&funded)
-			if funded != "" && strings.ToLower(funded) != addr {
-				linked = append(linked, LinkedWallet{Address: funded, Type: WalletEOA})
-			}
-		}
-	}()
+	riskEoaPoolMu.Lock()
+	riskEoaPool = newPool
+	riskEoaPoolMu.Unlock()
 
-	return linked
+	allLinkedAddressesMu.Lock()
+	allLinkedAddresses = newLinked
+	allLinkedAddressesMu.Unlock()
+
+	log.Printf("[wallet] pool: %d risk EOAs, %d linked addresses (with whitelist+TTL)", len(newPool), len(newLinked))
 }
 
-// Lookup checks if an address (maker/taker) matches any risk wallet
-func lookupRiskWallet(address string) *RiskWalletEntry {
-	riskAddressSetMu.RLock()
-	defer riskAddressSetMu.RUnlock()
-	return riskAddressSet[strings.ToLower(address)]
+// ═══════════════════════════════════════════
+// Unified matching: Proxy→Owner→RiskPool
+// ═══════════════════════════════════════════
+
+func lookupRiskWallet(address string) []*RiskWalletEntry {
+	addr := strings.ToLower(address)
+
+	// Step 1: Check if this address is a Proxy → resolve to Owner EOA
+	owner := getProxyOwner(addr)
+	if owner != "" {
+		addr = owner
+	}
+
+	// Step 2: Check all linked addresses (multi-root)
+	allLinkedAddressesMu.RLock()
+	defer allLinkedAddressesMu.RUnlock()
+
+	if entries := allLinkedAddresses[addr]; len(entries) > 0 {
+		return entries
+	}
+
+	// Step 3: Direct EOA pool check
+	riskEoaPoolMu.RLock()
+	defer riskEoaPoolMu.RUnlock()
+	if entry := riskEoaPool[addr]; entry != nil {
+		return []*RiskWalletEntry{entry}
+	}
+
+	return nil
 }
+
+func lookupRiskEoa(eoa string) bool {
+	riskEoaPoolMu.RLock()
+	defer riskEoaPoolMu.RUnlock()
+	_, ok := riskEoaPool[strings.ToLower(eoa)]
+	return ok
+}
+
+// ═══════════════════════════════════════════
+// Lifecycle
+// ═══════════════════════════════════════════
 
 func startWalletLinkRefresher() {
-	refreshRiskWalletLinks()
-
-	// Periodic refresh
+	refreshRiskPool()
 	go func() {
 		ticker := time.NewTicker(time.Duration(informedConfig.WalletRefreshSec) * time.Second)
 		defer ticker.Stop()
 		for range ticker.C {
-			refreshRiskWalletLinks()
+			refreshRiskPool()
 		}
 	}()
+
+	// Proxy cleanup: refresh every 30 min (full scan of Proxy Factory for active EOAs)
+	go func() {
+		ticker := time.NewTicker(30 * time.Minute)
+		defer ticker.Stop()
+		for range ticker.C {
+			refreshProxyOwnersFromChain()
+		}
+	}()
+}
+
+// refreshProxyOwnersFromChain queries Polymarket ProxyFactory for each risk EOA
+func refreshProxyOwnersFromChain() {
+	riskEoaPoolMu.RLock()
+	eoas := make([]string, 0, len(riskEoaPool))
+	for eoa := range riskEoaPool {
+		eoas = append(eoas, eoa)
+	}
+	riskEoaPoolMu.RUnlock()
+
+	count := 0
+	for _, eoa := range eoas {
+		// Call Polymarket ProxyFactory.getProxy(eoa) via RPC
+		proxy := discoverProxyForEOA(eoa)
+		if proxy != "" {
+			addProxyOwner(proxy, eoa)
+			count++
+		}
+	}
+	if count > 0 {
+		log.Printf("[proxy] refreshed %d EOA→Proxy mappings", count)
+	}
+}
+
+// discoverProxyForEOA queries Polymarket ProxyFactory for an EOA's proxy
+// v1: stub — will implement via RPC eth_call to ProxyFactory contract
+func discoverProxyForEOA(eoa string) string {
+	// TODO: implement via eth_call to Polymarket ProxyFactory.getProxy(eoa)
+	return ""
 }
