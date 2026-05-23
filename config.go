@@ -86,9 +86,19 @@ var globalWhitelist = map[string]bool{
 	"0xdef171fe48cf0115b1d80b88dc8eab59176fee57": true,
 	"0xa0c68c638235ee32657e8f720a23cec1bfc77c77": true,
 	"0x7a4b5a56256163f07b2c80a7ca55abe66c4ec4d7": true,
-	"0xa160cdab225685da1d56aa342ad8841c3b53f291": true,
 }
 
 func isWhitelisted(addr string) bool {
 	return globalWhitelist[addr]
+}
+
+var mixerBlacklist = map[string]bool{
+	"0xa160cdab225685da1d56aa342ad8841c3b53f291": true, // Tornado Cash
+	"0x12d66f87a04a9e220743712ce6d9bb1b5616b8fc": true, // Tornado Cash ETH
+	"0x47ce0c6ed5b0ce3d3a51fdb1c52dc66a7c3c2936": true, // Tornado Cash ERC20
+	"0x910cbd523d972eb0a6f4cae4618ad62622b39dbf": true, // Tornado Cash ERC20
+}
+
+func isMixer(addr string) bool {
+	return mixerBlacklist[addr]
 }
