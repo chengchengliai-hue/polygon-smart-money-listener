@@ -1,12 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 )
@@ -26,6 +26,7 @@ func outputInformedAlert(scored InformedScoredEvent) {
 	tokenID := ""
 	outcome := ""
 	outcomeIdx := 0
+	marketSlug := ""
 
 	if scored.TokenOutcome != nil {
 		category = scored.TokenOutcome.Category
@@ -34,6 +35,12 @@ func outputInformedAlert(scored InformedScoredEvent) {
 		tokenID = scored.TokenOutcome.TokenID
 		outcome = scored.TokenOutcome.Outcome
 		outcomeIdx = scored.TokenOutcome.OutcomeIndex
+		marketSlug = scored.TokenOutcome.MarketSlug
+	}
+
+	marketURL := ""
+	if marketSlug != "" {
+		marketURL = "https://polymarket.com/" + marketSlug
 	}
 
 	estimatedUsdc := scored.TakerAmount
@@ -59,6 +66,8 @@ func outputInformedAlert(scored InformedScoredEvent) {
 			TokenID:              tokenID,
 			Outcome:              outcome,
 			OutcomeIndex:         outcomeIdx,
+			MarketSlug:           marketSlug,
+			MarketURL:            marketURL,
 			Action:               scored.Action,
 			Direction:            scored.Direction,
 			EstimatedUsdc:        estimatedUsdc,
@@ -82,73 +91,121 @@ func outputInformedAlert(scored InformedScoredEvent) {
 
 func pushToTelegram(alert *InformedEventAlert) {
 	severityCN := map[string]string{"high": "高危", "normal": "普通", "watch": "观察"}
-	emoji := map[string]string{"high": "\xF0\x9F\x94\xB4", "normal": "\xF0\x9F\x9F\xA1", "watch": "\xE2\x9A\xAA"}
-	actionCN := map[string]string{"BUY": "买入", "SELL": "卖出", "UNKNOWN": "未知"}
-	roleCN := map[string]string{"maker": "挂单成交", "taker": "吃单成交"}
-	outcomeCN := map[string]string{"YES": "YES（看多）", "NO": "NO（看空）"}
-	walletTypeCN := map[string]string{
-		"EOA":             "EOA 普通钱包",
-		"POLY_PROXY":      "Polymarket 代理合约",
-		"GNOSIS_SAFE":     "Gnosis Safe 代理合约",
-		"DEPOSIT_WALLET":  "Polymarket 存款钱包",
-		"SESSION_SIGNER":  "会话签名",
-	}
+	emoji := map[string]string{"high": "🔴", "normal": "🟡", "watch": "⚪"}
 
 	cn := severityCN[alert.Severity]
-	dir := fmt.Sprintf("%s%s", alert.Data.Action, alert.Data.Outcome)
-	if out, ok := outcomeCN[alert.Data.Outcome]; ok {
-		dir = fmt.Sprintf("%s%s", actionCN[alert.Data.Action], out)
-	}
-	role := roleCN[alert.Severity]
-	if r, ok := roleCN[alert.Data.MatchedRole]; ok {
-		role = r
-	}
-	wt := alert.Data.MatchedWalletType
-	if w, ok := walletTypeCN[alert.Data.MatchedWalletType]; ok {
-		wt = w
+
+	// Direction display
+	actionCN := map[string]string{"BUY": "买入", "SELL": "卖出"}
+	outcomeCN := map[string]string{"YES": "YES", "NO": "NO"}
+	actionStr := actionCN[alert.Data.Action]
+	outcomeStr := outcomeCN[alert.Data.Outcome]
+
+	// Direction interpretation
+	dirExplain := alert.Data.Direction
+	switch {
+	case alert.Data.Action == "BUY" && alert.Data.Outcome == "YES":
+		dirExplain = "看多 YES"
+	case alert.Data.Action == "BUY" && alert.Data.Outcome == "NO":
+		dirExplain = "看空（买入 NO）"
+	case alert.Data.Action == "SELL" && alert.Data.Outcome == "NO":
+		dirExplain = "看多（卖出 NO）"
+	case alert.Data.Action == "SELL" && alert.Data.Outcome == "YES":
+		dirExplain = "看空（卖出 YES）"
 	}
 
-	// Source tag
+	// Source detection
 	source := "历史巨鲸池命中"
 	for _, t := range alert.Data.Tags {
-		if t == "Polymarket Native Discovery" {
+		if strings.Contains(t, "原生发现") {
 			source = "Polymarket 原生发现"
 			break
 		}
 	}
 
-	// Convert UTC to Beijing time
+	// Market name
+	marketName := alert.Data.MarketQuestion
+	if marketName == "" {
+		marketName = "(市场信息补全中)"
+	}
+
+	// Category
+	category := alert.Data.EventCategory
+	if category == "" {
+		category = "未知"
+	}
+
+	// Wallet display (shorten)
+	rootShort := alert.Data.RootWalletAddress
+	matchedShort := alert.Data.RootWalletAddress
+	if len(rootShort) > 14 {
+		rootShort = rootShort[:8] + "..." + rootShort[len(rootShort)-6:]
+	}
+	if len(matchedShort) > 14 {
+		matchedShort = matchedShort[:8] + "..." + matchedShort[len(matchedShort)-6:]
+	}
+
+	// Total entity position (estimate from aggregated trades)
+	amount := alert.Data.EstimatedUsdc
+
+	// Beijing time
 	beijing := alert.Data.DetectedAt
 	if t, err := time.Parse(time.RFC3339, alert.Data.DetectedAt); err == nil {
 		beijing = t.In(time.FixedZone("CST", 8*3600)).Format("2006-01-02 15:04:05")
 	}
 
-	text := fmt.Sprintf("%s 聪明钱报警 — %s\n\n市场：%s\n分类：%s\n下注金额：$%.0f USDC\n方向：%s\n交易角色：%s\n\n根钱包（巨鲸）：%s\n匹配钱包（代理）：%s\n钱包类型：%s\n\n来源：%s\n风险评分：%d 分\n标签：%s\n交易哈希：%s\n区块号：%d\n发现时间：%s（北京时间）",
-		emoji[alert.Severity],
-		cn,
-		alert.Data.MarketQuestion,
-		alert.Data.EventCategory,
-		alert.Data.EstimatedUsdc,
-		dir,
-		role,
-		alert.Data.RootWalletAddress,
-		alert.Data.MatchedWalletAddress,
-		wt,
-		source,
-		alert.Data.RiskScore,
-		strings.Join(alert.Data.Tags, "、"),
-		alert.Data.TxHash,
-		alert.Data.BlockNumber,
-		beijing,
+	// Build message
+		lines := []string{
+			fmt.Sprintf("%s 聪明钱预警 — %s", emoji[alert.Severity], cn),
+			"",
+			fmt.Sprintf("👛 捕获钱包: %s", rootShort),
+			fmt.Sprintf("🐋 关联巨鲸: %s", matchedShort),
+			fmt.Sprintf("📌 市场: %s", marketName),
+			fmt.Sprintf("🏷 分类: %s  |  💰 金额: $%.0f  |  %s %s", category, amount, actionStr, outcomeStr),
+			fmt.Sprintf("📊 方向: %s", dirExplain),
+			fmt.Sprintf("📈 评分: %d 分  |  来源: %s", alert.Data.RiskScore, source),
+			"",
+			fmt.Sprintf("🏷 标签: %s", strings.Join(alert.Data.Tags, " · ")),
+			"",
+			fmt.Sprintf("⏰ %s（北京时间）", beijing),
+		}
+
+	if alert.Data.MarketURL != "" {
+		lines = append(lines, "", fmt.Sprintf("🔗 %s", alert.Data.MarketURL))
+	}
+
+	text := strings.Join(lines, "\n")
+
+	// Build inline keyboard: market link + wallet link
+	marketLink := alert.Data.MarketURL
+	if marketLink == "" {
+		marketLink = "https://polymarket.com"
+	}
+	walletLink := "https://polygonscan.com/address/" + alert.Data.MatchedWalletAddress
+	txLink := "https://polygonscan.com/tx/" + alert.Data.TxHash
+	profileLink := "https://polymarket.com/profile/" + alert.Data.MatchedWalletAddress
+
+	keyboard := fmt.Sprintf(
+		`{"inline_keyboard":[[{"text":"📊 查看市场","url":"%s"},{"text":"🔍 钱包","url":"%s"}],[{"text":"📝 交易","url":"%s"}],[{"text":"💼 持仓","url":"%s"}]]}`,
+		marketLink, walletLink, txLink, profileLink,
 	)
 
-	// Build inline keyboard with smart money button
-	payload := fmt.Sprintf(`{"chat_id":"%s","text":"%s","parse_mode":"HTML","reply_markup":"{\"inline_keyboard\":[[{\"text\":\"💡 聪明钱报警\",\"callback_data\":\"smart_money\"},{\"text\":\"🔗 Polygonscan\",\"url\":\"https://polygonscan.com/address/%s\"}]]}"}`,
-		tgChatID, url.QueryEscape(text), alert.Data.RootWalletAddress)
+	var kbMap map[string]interface{}
+	json.Unmarshal([]byte(keyboard), &kbMap)
+
+	payloadMap := map[string]interface{}{
+		"chat_id":                  tgChatID,
+		"text":                     text,
+		"parse_mode":               "HTML",
+		"disable_web_page_preview": true,
+		"reply_markup":             kbMap,
+	}
+
+	payloadBytes, _ := json.Marshal(payloadMap)
 	resp, err := http.Post(
 		fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", tgBotToken),
 		"application/json",
-		strings.NewReader(payload),
+		bytes.NewReader(payloadBytes),
 	)
 	if err != nil {
 		log.Printf("[tg] push failed: %v", err)

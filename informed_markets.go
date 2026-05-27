@@ -19,6 +19,9 @@ import (
 var (
 	tokenOutcomeMap   = make(map[string]*TokenOutcome)
 	tokenOutcomeMapMu sync.RWMutex
+
+	conditionMetaMap   = make(map[string]*TokenOutcome) // conditionId → metadata
+	conditionMetaMapMu sync.RWMutex
 )
 
 // Polymarket CTF contract (same on Polygon)
@@ -35,7 +38,7 @@ var ctfABI = `[{
 // High-information event categories
 var highInfoCategories = map[string]bool{
 	"political": true, "macro": true, "legal_regulatory": true,
-	"corporate": true, "sports_injury": true, "entertainment_leak": true,
+	"corporate": true, "entertainment_leak": true,
 	"geopolitical": true, "crypto_regulatory": true, "tech_release": true,
 	"market_resolution": true,
 }
@@ -51,54 +54,55 @@ func startMarketRefresher() {
 	}()
 }
 
-// refreshMarketsFromChain loads markets from SQLite cache + Gamma API + on-chain discovery
 func refreshMarketsFromChain() {
 	loadMarketsFromCache()
 
-	// Try Gamma API via proxy
-	gammaEvents, err := fetchGammaEvents()
-	if err == nil && len(gammaEvents) > 0 {
-		newMap := make(map[string]*TokenOutcome)
-		for _, evt := range gammaEvents {
-			if evt.Closed {
-				continue
-			}
-			// Extract category from tags
-			cat := ""
-			for _, tag := range evt.Tags {
-				cat = normalizeCategory(tag.Label)
-				if cat != "" && highInfoCategories[cat] {
-					break
+	count := 0
+	newMap := make(map[string]*TokenOutcome)
+	cursor := ""
+
+	for page := 0; page < 10; page++ {
+		markets, nextCursor, err := fetchCLOBMarkets(cursor)
+		if err != nil {
+			log.Printf("[markets] clob unavailable: %v", err)
+			break
+		}
+		for _, m := range markets {
+			condID := m.ConditionID
+			for _, tok := range m.Tokens {
+				outcomeIdx := 0
+				outcome := tok.Outcome
+				switch strings.ToLower(outcome) {
+				case "yes":
+					outcomeIdx = 0
+				case "no":
+					outcomeIdx = 1
+				default:
+					outcomeIdx = 0 // custom outcome
 				}
-			}
-			if cat == "" {
-				cat = normalizeCategory(evt.Slug)
-			}
-			if !highInfoCategories[cat] {
-				continue
-			}
-			for _, mkt := range evt.Markets {
-				clobIDs := parseJSONStringArray(mkt.ClobTokenIDsRaw)
-				if len(clobIDs) < 2 {
-					continue
+				t := &TokenOutcome{
+					TokenID:      tok.TokenID,
+					ConditionID:  condID,
+					Outcome:      outcome,
+					OutcomeIndex: outcomeIdx,
 				}
-				yesT := &TokenOutcome{TokenID: clobIDs[0], ConditionID: mkt.ConditionID, MarketSlug: evt.Slug, Question: mkt.Question, Outcome: "YES", OutcomeIndex: 0, Category: cat, EndDate: evt.EndDate}
-				noT := &TokenOutcome{TokenID: clobIDs[1], ConditionID: mkt.ConditionID, MarketSlug: evt.Slug, Question: mkt.Question, Outcome: "NO", OutcomeIndex: 1, Category: cat, EndDate: evt.EndDate}
-					newMap[yesT.TokenID] = yesT
-					newMap[noT.TokenID] = noT
-					saveInformedMarket(yesT)
-					saveInformedMarket(noT)
-				}
+				newMap[tok.TokenID] = t
+				count++
 			}
-			tokenOutcomeMapMu.Lock()
-			tokenOutcomeMap = newMap
-			tokenOutcomeMapMu.Unlock()
-			log.Printf("[markets] gamma: cached %d high-info token outcomes", len(newMap))
-		} else if err != nil {
-		log.Printf("[markets] gamma unavailable: %v", err)
+		}
+		if nextCursor == "" {
+			break
+		}
+		cursor = nextCursor
 	}
 
-	// On-chain fallback
+	if count > 0 {
+		tokenOutcomeMapMu.Lock()
+		tokenOutcomeMap = newMap
+		tokenOutcomeMapMu.Unlock()
+		log.Printf("[markets] clob: cached %d token outcomes from %d markets", count, len(newMap))
+	}
+
 	refreshFromRecentTrades()
 }
 
@@ -124,7 +128,6 @@ func loadMarketsFromCache() {
 	}
 }
 
-// refreshFromRecentTrades: for each risk wallet, fetch recent Polymarket trades and cache unknown tokens
 func refreshFromRecentTrades() {
 	client, err := ethclient.Dial(config.HttpRpcUrl)
 	if err != nil {
@@ -146,9 +149,8 @@ func refreshFromRecentTrades() {
 	ctfAddr := common.HexToAddress(informedConfig.CtfExchange)
 	negRiskAddr := common.HexToAddress(informedConfig.NegRiskExchange)
 	currentBlock, _ := client.BlockNumber(context.Background())
-	fromBlock := currentBlock - 5000 // last ~17 hours
+	fromBlock := currentBlock - 5000
 
-	// Fetch recent OrderFilled events for these exchanges
 	query := ethereum.FilterQuery{
 		Addresses: []common.Address{ctfAddr, negRiskAddr},
 		Topics:    [][]common.Hash{{orderFilledTopic, ordersMatchedTopic}},
@@ -167,16 +169,12 @@ func refreshFromRecentTrades() {
 		if trade == nil {
 			continue
 		}
-
-		// Cache unknown token IDs with basic info
 		for _, tokenID := range []string{trade.MakerAssetID, trade.TakerAssetID} {
 			tokenOutcomeMapMu.RLock()
 			_, exists := tokenOutcomeMap[tokenID]
 			tokenOutcomeMapMu.RUnlock()
 
 			if !exists {
-				// Create basic entry for this token
-				// TokenID encodes conditionId + outcome index
 				condID, outcomeIdx := parseTokenID(tokenID)
 				if condID != "" {
 					t := &TokenOutcome{
@@ -199,20 +197,6 @@ func refreshFromRecentTrades() {
 	if newTokens > 0 {
 		log.Printf("[markets] on-chain: cached %d new token outcomes from recent trades", newTokens)
 	}
-}
-
-// parseTokenID extracts conditionId and outcome index from a CTF token ID
-// CTF token IDs: uint256(conditionId) << 1 | outcomeIndex
-
-// parseJSONStringArray parses Polymarket Gamma API's string-encoded JSON arrays
-// e.g. "[\"Yes\", \"No\"]" → ["Yes", "No"]
-func parseJSONStringArray(raw string) []string {
-	if raw == "" {
-		return nil
-	}
-	var result []string
-	json.Unmarshal([]byte(raw), &result)
-	return result
 }
 
 func parseTokenID(tokenID string) (string, int) {
@@ -238,6 +222,12 @@ func lookupTokenOutcome(tokenID string) *TokenOutcome {
 	tokenOutcomeMapMu.RLock()
 	defer tokenOutcomeMapMu.RUnlock()
 	return tokenOutcomeMap[tokenID]
+}
+
+func lookupConditionMeta(conditionID string) *TokenOutcome {
+	conditionMetaMapMu.RLock()
+	defer conditionMetaMapMu.RUnlock()
+	return conditionMetaMap[strings.ToLower(conditionID)]
 }
 
 func isHighInfoCategory(cat string) bool {
@@ -280,26 +270,36 @@ func saveInformedMarket(t *TokenOutcome) {
 	dbWriteMu.Unlock()
 }
 
-
-
-
-func fetchGammaEvents() ([]GammaEvent, error) {
-	req, err := http.NewRequest("GET", informedConfig.GammaBaseURL+"/events?limit=200&closed=false", nil)
-	if err != nil {
-		return nil, err
+func parseJSONStringArray(raw string) []string {
+	if raw == "" {
+		return nil
 	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36")
+	var result []string
+	json.Unmarshal([]byte(raw), &result)
+	return result
+}
+
+func fetchCLOBMarkets(cursor string) ([]clobSimplifiedMarket, string, error) {
+	url := "https://clob.polymarket.com/simplified-markets"
+	if cursor != "" {
+		url += "?next_cursor=" + cursor
+	}
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, "", err
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0")
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := httpClient.Do(req)
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	defer resp.Body.Close()
 
-	var events []GammaEvent
-	if err := json.NewDecoder(resp.Body).Decode(&events); err != nil {
-		return nil, err
+	var result clobMarketsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, "", err
 	}
-	return events, nil
+	return result.Data, result.NextCursor, nil
 }

@@ -15,12 +15,6 @@ type LinkedWallet struct {
 	Type    WalletType `json:"type"`
 }
 
-type ProxyOwner struct {
-	ProxyAddress string `json:"proxy_address"`
-	OwnerEOA     string `json:"owner_eoa"`
-	LastUpdated  int64  `json:"last_updated"`
-}
-
 type RiskWalletEntry struct {
 	RootAddresses []string       `json:"root_eoas"`
 	RiskScore     int            `json:"risk_score"`
@@ -98,6 +92,8 @@ type InformedEventData struct {
 	OutcomeIndex         int      `json:"outcome_index"`
 	Action               string   `json:"action"`
 	Direction            string   `json:"direction"`
+	MarketSlug           string   `json:"market_slug"`
+	MarketURL            string   `json:"market_url"`
 	EstimatedUsdc        float64  `json:"estimated_usdc"`
 	AvgPrice             float64  `json:"avg_price"`
 	RiskScore            int      `json:"risk_score"`
@@ -108,29 +104,22 @@ type InformedEventData struct {
 	DetectedAt           string   `json:"detected_at"`
 }
 
-type GammaEvent struct {
-	ID        string        `json:"id"`
-	Title     string        `json:"title"`
-	Slug      string        `json:"slug"`
-	Liquidity float64       `json:"liquidity"`
-	Volume    float64       `json:"volume"`
-	EndDate   string        `json:"end_date"`
-	Closed    bool          `json:"closed"`
-	Tags      []GammaTag    `json:"tags"`
-	Markets   []GammaMarket `json:"markets"`
+// CLOB simplified markets (replaces Gamma)
+type clobSimplifiedMarket struct {
+	ConditionID string          `json:"condition_id"`
+	Tokens      []clobMarketToken `json:"tokens"`
+	Active      bool            `json:"active"`
+	Closed      bool            `json:"closed"`
 }
 
-type GammaTag struct {
-	ID    string `json:"id"`
-	Label string `json:"label"`
-	Slug  string `json:"slug"`
+type clobMarketToken struct {
+	TokenID string `json:"token_id"`
+	Outcome string `json:"outcome"`
+	Price   float64 `json:"price"`
+	Winner  bool   `json:"winner"`
 }
 
-type GammaMarket struct {
-	ID               string `json:"id"`
-	Question         string `json:"question"`
-	ConditionID      string `json:"conditionId"`
-	OutcomesRaw      string `json:"outcomes"`
-	OutcomePricesRaw string `json:"outcomePrices"`
-	ClobTokenIDsRaw  string `json:"clobTokenIds"`
+type clobMarketsResponse struct {
+	Data       []clobSimplifiedMarket `json:"data"`
+	NextCursor string                 `json:"next_cursor"`
 }

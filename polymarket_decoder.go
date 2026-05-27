@@ -44,6 +44,12 @@ var ordersMatchedABI = mustParseABI(`[{
 	"type": "event"
 }]`)
 
+// OrderFilled event signature
+var orderFilledTopic = common.HexToHash("0xa4f26b01428124668d5c13a09683562cb7d240e974ebc4c81b73093431b74be0")
+
+// OrdersMatched event signature (from Neg Risk exchange)
+var ordersMatchedTopic = common.HexToHash("0x9c0d3a22c1777c9b304099b2d225ccf7a3c4ef3d26ad6404acf71e2382fefec7")
+
 func mustParseABI(jsonABI string) abi.ABI {
 	parsed, err := abi.JSON(strings.NewReader(jsonABI))
 	if err != nil {

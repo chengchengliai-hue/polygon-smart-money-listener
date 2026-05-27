@@ -1,190 +1,227 @@
 package main
 
 import (
-	"context"
+	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
 	"strings"
+	"sync"
 	"time"
-
-	"github.com/ethereum/go-ethereum"
-	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/ethclient"
 )
 
-// OrderFilled event signature
-var orderFilledTopic = common.HexToHash("0xa4f26b01428124668d5c13a09683562cb7d240e974ebc4c81b73093431b74be0")
+var dataAPIKey = ""
+var polymarketLastTimestamp int64
 
-// OrdersMatched event signature (from Neg Risk exchange)
-var ordersMatchedTopic = common.HexToHash("0x9c0d3a22c1777c9b304099b2d225ccf7a3c4ef3d26ad6404acf71e2382fefec7")
+func init() {
+	dataAPIKey = getEnv("POLYMARKET_DATA_API_KEY", "")
+}
 
-var polymarketLastBlock uint64
+type dataTrade struct {
+	ProxyWallet     string  `json:"proxyWallet"`
+	Side            string  `json:"side"`
+	Price           float64 `json:"price"`
+	Size            float64 `json:"size"`
+	Title           string  `json:"title"`
+	Slug            string  `json:"slug"`
+	EventSlug       string  `json:"eventSlug"`
+	Outcome         string  `json:"outcome"`
+	OutcomeIndex    int     `json:"outcomeIndex"`
+	Asset           string  `json:"asset"`
+	ConditionID     string  `json:"conditionId"`
+	TransactionHash string  `json:"transactionHash"`
+	Timestamp       int64   `json:"timestamp"`
+}
 
 func startPolymarketListener() {
-	connectPolymarket := func() {
-backoff := 1 * time.Second
+	if dataAPIKey == "" {
+		log.Printf("[polymarket] no DATA_API_KEY, listener disabled")
+		return
+	}
+	go func() {
 		for {
-			err := runPolymarketListener()
+			err := runDataAPIPoller()
 			if err != nil {
-				if strings.Contains(err.Error(), "429") {
-					backoff = 60 * time.Second
-				}
-				jitter := time.Duration(float64(backoff) * (0.7 + float64(time.Now().UnixNano()%300)/1000.0))
-				log.Printf("[polymarket] error: %v, reconnecting in %v...", err, jitter.Round(time.Second))
-				time.Sleep(jitter)
-				backoff *= 2
-				if backoff > 120*time.Second {
-					backoff = 120 * time.Second
-				}
-			} else {
-				backoff = 1 * time.Second
+				log.Printf("[polymarket] data api error: %v, retrying in 10s...", err)
+				time.Sleep(10 * time.Second)
 			}
 		}
-	}
-	go connectPolymarket()
+	}()
 }
 
-func runPolymarketListener() error {
-	wsClient, err := ethclient.Dial(config.WsRpcUrl)
-	if err != nil {
-		return fmt.Errorf("polymarket ws: %w", err)
+func runDataAPIPoller() error {
+	if polymarketLastTimestamp == 0 {
+		polymarketLastTimestamp = time.Now().Unix() - 600 // 10min buffer for API delay
 	}
-	defer wsClient.Close()
+	log.Printf("[polymarket] data api poller started from ts=%d", polymarketLastTimestamp)
 
-	httpClient, err := ethclient.Dial(config.HttpRpcUrl)
-	if err != nil {
-		return fmt.Errorf("polymarket http: %w", err)
-	}
-	defer httpClient.Close()
-
-	// Get current block (with nil check - 1RPC may return nil on error)
-	polymarketLastBlock = 0
-	header, err := wsClient.HeaderByNumber(context.Background(), nil)
-	if err == nil && header != nil {
-		polymarketLastBlock = header.Number.Uint64()
-	}
-	if polymarketLastBlock == 0 {
-		polymarketLastBlock, _ = httpClient.BlockNumber(context.Background())
-	}
-
-	ctfAddr := common.HexToAddress(informedConfig.CtfExchange)
-	negRiskAddr := common.HexToAddress(informedConfig.NegRiskExchange)
-
-	query := ethereum.FilterQuery{
-		Addresses: []common.Address{ctfAddr, negRiskAddr},
-		Topics:    [][]common.Hash{{orderFilledTopic, ordersMatchedTopic}},
-	}
-
-	logsCh := make(chan types.Log)
-	sub, err := wsClient.SubscribeFilterLogs(context.Background(), query, logsCh)
-	if err != nil {
-		return fmt.Errorf("polymarket subscribe: %w", err)
-	}
-	log.Printf("[polymarket] subscribed to Exchange events")
-
-	ticker := time.NewTicker(30 * time.Second)
-	defer ticker.Stop()
+	var eventCount, matchedCount, alertedCount uint64
+	var rawCount, hashSkipCount, sideSkipCount uint64
+	lastDebug := time.Now()
 
 	for {
-		select {
-		case err := <-sub.Err():
-			return fmt.Errorf("polymarket sub error: %w", err)
-
-		case vLog := <-logsCh:
-			if vLog.Removed {
-				continue
-			}
-
-			eventKey := fmt.Sprintf("%s_%d", vLog.TxHash.Hex(), vLog.Index)
-			if isPolymarketEventSeen(eventKey) {
-				continue
-			}
-			markPolymarketEventSeen(eventKey, vLog.TxHash.Hex(), vLog.Index, vLog.BlockNumber)
-
-			trade := decodeTrade(vLog)
-			if trade == nil {
-				continue
-			}
-
-			// Match maker/funder against risk address set
-			matched := matchTrade(trade)
-			if matched != nil {
-				scored := scoreInformedEvent(matched)
-				if scored.RiskScore >= informedConfig.AlertThreshold {
-					outputInformedAlert(scored)
-				}
-			} else {
-				native := scoreNativeDiscovery(trade, httpClient)
-				if native != nil && native.RiskScore >= informedConfig.AlertThreshold {
-					outputInformedAlert(*native)
-				}
-			}
-
-		case <-ticker.C:
-			polymarketLastBlock, _ = httpClient.BlockNumber(context.Background())
+		url := fmt.Sprintf("https://data-api.polymarket.com/trades?limit=1000&apiKey=%s&_t=%d", dataAPIKey, time.Now().UnixMilli())
+		resp, err := http.Get(url)
+		if err != nil {
+			return fmt.Errorf("http get: %w", err)
 		}
+
+		var trades []dataTrade
+		if err := json.NewDecoder(resp.Body).Decode(&trades); err != nil {
+			resp.Body.Close()
+			return fmt.Errorf("decode: %w", err)
+		}
+		resp.Body.Close()
+
+		for _, t := range trades {
+			rawCount++
+			// Precise dedup by tx hash
+			if isPolymarketEventSeen(t.TransactionHash) {
+				hashSkipCount++
+				continue
+			}
+			markPolymarketEventSeen(t.TransactionHash, t.TransactionHash, 0, 0)
+			eventCount++
+
+			side := strings.ToUpper(t.Side)
+			if side != "BUY" {
+				sideSkipCount++
+				continue
+			}
+
+			notional := t.Price * t.Size
+
+			// Check crypto short-term accumulation
+			checkAccumulation(t.ProxyWallet, t.Slug, t.Title, t.Outcome, side, notional, t.Price)
+			if notional < informedConfig.MinTradeUsdc {
+				continue
+			}
+
+			entries := lookupRiskWallet(t.ProxyWallet)
+			if len(entries) == 0 {
+				isNew, ageHours := checkNewWallet(t.ProxyWallet)
+				if isNew {
+					tokenOutcome := &TokenOutcome{
+						TokenID:      t.Asset,
+						ConditionID:  t.ConditionID,
+						Outcome:      strings.ToUpper(t.Outcome),
+						OutcomeIndex: t.OutcomeIndex,
+						Question:     t.Title,
+						MarketSlug:   "market/" + t.Slug,
+					}
+					dirLabel := directionLabel(t.Outcome, side)
+					trade := DecodedTrade{
+						TxHash:       t.TransactionHash,
+						Maker:        t.ProxyWallet,
+						TakerAssetID: t.Asset,
+						MakerAmount:  notional,
+						TakerAmount:  notional,
+					}
+					native := MatchedTrade{
+						DecodedTrade:      trade,
+						MatchedWallet:     t.ProxyWallet,
+						MatchedWalletType: WalletEOA,
+						MatchedRole:       "maker",
+						RootAddress:       t.ProxyWallet,
+						TokenOutcome:      tokenOutcome,
+						Action:            side,
+						Direction:         dirLabel,
+					}
+					nativeScore := 70
+					nativeTags := []string{"原生发现(+70)", "大额定向(+20)"}
+					if ageHours < 2 {
+						nativeScore += 15
+						nativeTags = append(nativeTags, "数小时内新建(+15)")
+					} else if ageHours < 12 {
+						nativeScore += 5
+						nativeTags = append(nativeTags, "近期新建(+5)")
+					}
+					if ed := fetchEndDate(t.Asset); ed != "" {
+						if h := hoursToEnd(ed); h >= 0 {
+							if h < 2 {
+								nativeScore += 25
+								nativeTags = append(nativeTags, "临期入场(+25)")
+							} else if h < 24 {
+								nativeScore += 15
+								nativeTags = append(nativeTags, "临近结算(+15)")
+							}
+						}
+					}
+					scored := InformedScoredEvent{
+						MatchedTrade: native,
+						RiskScore:    nativeScore,
+						Tags:         nativeTags,
+						Severity:     "normal",
+					}
+					if scored.RiskScore >= informedConfig.AlertThreshold {
+						alertedCount++
+						outputInformedAlert(scored)
+					}
+				}
+				continue
+			}
+
+			matchedCount++
+			entry := entries[0]
+
+			tokenOutcome := &TokenOutcome{
+				TokenID:      t.Asset,
+				ConditionID:  t.ConditionID,
+				Outcome:      strings.ToUpper(t.Outcome),
+				OutcomeIndex: t.OutcomeIndex,
+				Question:     t.Title,
+				MarketSlug:   "market/" + t.Slug,
+			}
+
+			dirLabel := directionLabel(t.Outcome, side)
+
+			trade := DecodedTrade{
+				TxHash:       t.TransactionHash,
+				Maker:        t.ProxyWallet,
+				TakerAssetID: t.Asset,
+				MakerAmount:  notional,
+				TakerAmount:  notional,
+			}
+			matched := MatchedTrade{
+				DecodedTrade:      trade,
+				MatchedWallet:     t.ProxyWallet,
+				MatchedWalletType: WalletEOA,
+				MatchedRole:       "maker",
+				RootAddress:       entry.RootAddresses[0],
+				TokenOutcome:      tokenOutcome,
+				Action:            side,
+				Direction:         dirLabel,
+			}
+
+			scored := scoreInformedEvent(&matched)
+			if scored.RiskScore >= informedConfig.AlertThreshold {
+				alertedCount++
+				outputInformedAlert(scored)
+			}
+		}
+
+			if time.Since(lastDebug) > 60*time.Second {
+			cleanAccumulationMap()
+			log.Printf("[polymarket] raw=%d hashSkip=%d sideSkip=%d events=%d matched=%d alerted=%d", rawCount, hashSkipCount, sideSkipCount, eventCount, matchedCount, alertedCount)
+			lastDebug = time.Now()
+		}
+		time.Sleep(30 * time.Second)
 	}
 }
 
-// matchTrade checks if maker or taker is in the risk address set
-func matchTrade(trade *DecodedTrade) *MatchedTrade {
-	// Step 1: Check maker
-	entries := lookupRiskWallet(trade.Maker)
-	if len(entries) == 0 {
-		lazyResolveProxy(trade.Maker)
-		entries = lookupRiskWallet(trade.Maker)
-	}
-	if len(entries) > 0 {
-		entry := entries[0] // primary root
-		lw := findMatchedWallet(entry, trade.Maker)
-		rootAddr := entry.RootAddresses[0]
-		return &MatchedTrade{
-			DecodedTrade:      *trade,
-			MatchedWallet:     lw.Address,
-			MatchedWalletType: lw.Type,
-			MatchedRole:       "maker",
-			RootAddress:       rootAddr,
-			TokenOutcome:      lookupTokenOutcome(trade.TakerAssetID),
-			Action:            "BUY",
-			Direction:         determineDirection(trade.TakerAssetID, "BUY"),
-		}
-	}
 
-	// Step 2: Check taker
-	entries = lookupRiskWallet(trade.Taker)
-	if len(entries) == 0 {
-		lazyResolveProxy(trade.Taker)
-		entries = lookupRiskWallet(trade.Taker)
+func directionLabel(outcome, side string) string {
+	outcomeStr := strings.ToUpper(outcome)
+	if side != "BUY" {
+		return strings.ToLower(outcomeStr)
 	}
-	if len(entries) > 0 {
-		entry := entries[0]
-		lw := findMatchedWallet(entry, trade.Taker)
-		rootAddr := entry.RootAddresses[0]
-		return &MatchedTrade{
-			DecodedTrade:      *trade,
-			MatchedWallet:     lw.Address,
-			MatchedWalletType: lw.Type,
-			MatchedRole:       "taker",
-			RootAddress:       rootAddr,
-			TokenOutcome:      lookupTokenOutcome(trade.MakerAssetID),
-			Action:            "BUY",
-			Direction:         determineDirection(trade.MakerAssetID, "BUY"),
-		}
+	if outcomeStr == "YES" {
+		return "bullish"
 	}
-
-	return nil
-}
-
-func findMatchedWallet(entry *RiskWalletEntry, addr string) LinkedWallet {
-	if entry == nil { return LinkedWallet{Address: addr, Type: WalletEOA} }
-	lower := strings.ToLower(addr)
-	for _, lw := range entry.LinkedWallets {
-		if strings.ToLower(lw.Address) == lower {
-			return lw
-		}
+	if outcomeStr == "NO" {
+		return "bearish"
 	}
-	return LinkedWallet{Address: addr, Type: WalletEOA}
+	return outcomeStr
 }
 
 func determineDirection(tokenID, action string) string {
@@ -201,3 +238,88 @@ func determineDirection(tokenID, action string) string {
 	return "unknown"
 }
 
+type activityItem struct {
+	Timestamp int64 `json:"timestamp"`
+}
+
+var endDateCache = make(map[string]string)
+var endDateCacheMu sync.RWMutex
+
+func fetchEndDate(assetID string) string {
+	endDateCacheMu.RLock()
+	if ed, ok := endDateCache[assetID]; ok {
+		endDateCacheMu.RUnlock()
+		return ed
+	}
+	endDateCacheMu.RUnlock()
+
+	// Query CLOB /book → market hash → /markets → end_date_iso
+	req, _ := http.NewRequest("GET", "https://clob.polymarket.com/book?token_id="+assetID, nil)
+	req.Header.Set("User-Agent", "Mozilla/5.0")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+
+	var book struct{ Market string `json:"market"` }
+	if err := json.NewDecoder(resp.Body).Decode(&book); err != nil || book.Market == "" {
+		return ""
+	}
+
+	mktReq, _ := http.NewRequest("GET", "https://clob.polymarket.com/markets/"+book.Market, nil)
+	mktReq.Header.Set("User-Agent", "Mozilla/5.0")
+	mktResp, err := http.DefaultClient.Do(mktReq)
+	if err != nil {
+		return ""
+	}
+	defer mktResp.Body.Close()
+
+	var mkt struct {
+		EndDateISO string `json:"end_date_iso"`
+	}
+	json.NewDecoder(mktResp.Body).Decode(&mkt)
+
+	endDateCacheMu.Lock()
+	endDateCache[assetID] = mkt.EndDateISO
+	endDateCacheMu.Unlock()
+	return mkt.EndDateISO
+}
+
+func hoursToEnd(endDateISO string) float64 {
+	if endDateISO == "" {
+		return -1
+	}
+	formats := []string{time.RFC3339, "2006-01-02T15:04:05Z", "2006-01-02"}
+	for _, f := range formats {
+		if t, err := time.Parse(f, endDateISO); err == nil {
+			return t.Sub(time.Now()).Hours()
+		}
+	}
+	return -1
+}
+
+func checkNewWallet(addr string) (isNew bool, ageHours float64) {
+	url := fmt.Sprintf("https://data-api.polymarket.com/activity?user=%s&limit=100&apiKey=%s", addr, dataAPIKey)
+	resp, err := http.Get(url)
+	if err != nil {
+		return false, 0
+	}
+	defer resp.Body.Close()
+	var activities []activityItem
+	if err := json.NewDecoder(resp.Body).Decode(&activities); err != nil {
+		return false, 0
+	}
+	n := len(activities)
+	if n == 0 {
+		return true, 0 // 无任何记录,绝对新
+	}
+	// 拉满100条还返回100 → 老用户(可能更多)
+	if n >= 100 {
+		return false, 0
+	}
+	// 记录<100条,看最早交易是否在48h内
+	earliest := activities[n-1].Timestamp
+	ageHours = float64(time.Now().Unix()-earliest) / 3600
+	return n < 5 && ageHours < 48, ageHours
+}

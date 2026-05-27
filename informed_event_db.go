@@ -55,6 +55,7 @@ func initInformedTables(db *sql.DB) {
 
 		CREATE TABLE IF NOT EXISTS informed_event_alerts (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			event_type TEXT NOT NULL DEFAULT '',
 			root_address TEXT NOT NULL,
 			matched_address TEXT NOT NULL,
 			matched_wallet_type TEXT,
@@ -73,6 +74,11 @@ func initInformedTables(db *sql.DB) {
 			alerted_at TEXT NOT NULL DEFAULT (datetime('now'))
 		);
 	`)
+
+	// Migration: add event_type column for existing DBs
+	db.Exec(`ALTER TABLE informed_event_alerts ADD COLUMN event_type TEXT NOT NULL DEFAULT ''`)
+	db.Exec(`ALTER TABLE informed_event_alerts ADD COLUMN market_question TEXT NOT NULL DEFAULT ''`)
+	db.Exec(`ALTER TABLE informed_event_alerts ADD COLUMN market_slug TEXT NOT NULL DEFAULT ''`)
 }
 
 func loadWhaleAddresses() []RiskWalletEntry {
@@ -159,12 +165,14 @@ func saveInformedAlert(alert InformedEventAlert) {
 	tagsJson, _ := json.Marshal(alert.Data.Tags)
 	dbWriteMu.Lock()
 	db.Exec(
-		`INSERT INTO informed_event_alerts (root_address, matched_address, matched_wallet_type, condition_id, token_id, outcome, action, category, estimated_usdc, score, severity, tags, tx_hash, log_index, block_number)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO informed_event_alerts (event_type, root_address, matched_address, matched_wallet_type, condition_id, token_id, outcome, action, category, estimated_usdc, score, severity, tags, tx_hash, log_index, block_number, market_question, market_slug)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		alert.EventType,
 		alert.Data.RootWalletAddress, alert.Data.MatchedWalletAddress, alert.Data.MatchedWalletType,
 		alert.Data.ConditionID, alert.Data.TokenID, alert.Data.Outcome, alert.Data.Action,
 		alert.Data.EventCategory, alert.Data.EstimatedUsdc, alert.Data.RiskScore, alert.Severity,
 		string(tagsJson), alert.Data.TxHash, alert.Data.LogIndex, alert.Data.BlockNumber,
+		alert.Data.MarketQuestion, alert.Data.MarketSlug,
 	)
 	dbWriteMu.Unlock()
 }

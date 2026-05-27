@@ -10,12 +10,14 @@ import (
 )
 
 type Config struct {
-	WsRpcUrl           string
-	HttpRpcUrl         string
+	WsRpcUrl            string
+	WsRpcUrlFallback    string
+	HttpRpcUrl          string
+	HttpRpcUrlFallback  string
 	BalanceThresholdUsd float64
-	WindowSeconds      int
-	ConfirmationBlocks int
-	SqlitePath         string
+	WindowSeconds       int
+	ConfirmationBlocks  int
+	SqlitePath          string
 }
 
 var config Config
@@ -33,8 +35,10 @@ var knownCex = map[string]bool{
 func loadConfig() {
 	_ = godotenv.Load(".env")
 
-	config.WsRpcUrl = getEnv("POLYGON_WS_RPC_URL", "wss://polygon-mainnet.g.alchemy.com/v2/demo")
-	config.HttpRpcUrl = getEnv("POLYGON_HTTP_RPC_URL", "https://polygon-mainnet.g.alchemy.com/v2/demo")
+	config.WsRpcUrl = getEnv("POLYGON_WS_RPC_URL", "wss://polygon.drpc.org")
+	config.WsRpcUrlFallback = getEnv("POLYGON_WS_RPC_URL_FALLBACK", "wss://polygon.drpc.org")
+	config.HttpRpcUrl = getEnv("POLYGON_HTTP_RPC_URL", "https://polygon.drpc.org")
+	config.HttpRpcUrlFallback = getEnv("POLYGON_HTTP_RPC_URL_FALLBACK", "https://polygon.drpc.org")
 	config.BalanceThresholdUsd = getEnvFloat("BALANCE_THRESHOLD_USD", 10000)
 	config.WindowSeconds = getEnvInt("WINDOW_SECONDS", 900)
 	config.ConfirmationBlocks = getEnvInt("CONFIRMATION_BLOCKS", 16)
@@ -86,6 +90,11 @@ var globalWhitelist = map[string]bool{
 	"0xdef171fe48cf0115b1d80b88dc8eab59176fee57": true,
 	"0xa0c68c638235ee32657e8f720a23cec1bfc77c77": true,
 	"0x7a4b5a56256163f07b2c80a7ca55abe66c4ec4d7": true,
+	// Polymarket official contracts
+	"0xe111180000d2663c0091e4f400237545b87b996b": true, // CTF Exchange
+	"0xe2222d279d744050d28e00520010520000310f59": true, // Neg Risk Exchange
+	"0xab45c5a4b0c941a2f231c04c3f49182e1a254052": true, // ProxyFactory
+	"0x4d97dcd97ec945f40cf65f87097ace5ea0476045": true, // CTF Contract
 }
 
 func isWhitelisted(addr string) bool {

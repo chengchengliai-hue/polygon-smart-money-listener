@@ -19,14 +19,15 @@ import (
 )
 
 var (
-	processedCount  int64
-	alertCount      int64
+	processedCount     int64
+	alertCount         int64
 	lastProcessedBlock uint64
+	useFallback        bool
 
 	// Token addresses (lowercase)
-	usdtAddr = common.HexToAddress("0xc2132D05D31c914a87C6611C10748AEb04B58e8F")
-	usdcAddr     = common.HexToAddress("0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359")
-	usdcEAddr    = common.HexToAddress("0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174") // USDC.e bridged
+	usdtAddr      = common.HexToAddress("0xc2132D05D31c914a87C6611C10748AEb04B58e8F")
+	usdcAddr      = common.HexToAddress("0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359")
+	usdcEAddr     = common.HexToAddress("0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174") // USDC.e bridged
 	transferTopic = common.HexToHash("0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef")
 )
 
@@ -41,6 +42,8 @@ func main() {
 	startWalletLinkRefresher()
 	startMarketRefresher()
 	startPolymarketListener()
+	startBinancePoller()
+	startTelegramBot()
 
 	// Handle graceful shutdown
 	sigCh := make(chan os.Signal, 1)
@@ -61,8 +64,14 @@ func run() {
 	for {
 		err := startListener()
 		if err != nil {
-			// Rate limit: jump to max backoff immediately
-			if strings.Contains(err.Error(), "429") {
+			// Rate limit on primary → switch to fallback
+			if strings.Contains(err.Error(), "429") || strings.Contains(err.Error(), "402") {
+				if !useFallback && config.WsRpcUrl != config.WsRpcUrlFallback {
+					useFallback = true
+					log.Printf("[rpc] switching to fallback RPC: %s", config.WsRpcUrlFallback)
+					backoff = 1 * time.Second
+					continue
+				}
 				backoff = 60 * time.Second
 			}
 			// Jitter: ±30% to prevent both WS colliding
@@ -76,13 +85,24 @@ func run() {
 			}
 		} else {
 			backoff = 1 * time.Second
+			// Reconnected successfully on fallback → stay on fallback until it fails too
+			if useFallback {
+				log.Printf("[rpc] connected via fallback, staying on fallback")
+			}
 		}
 	}
 }
 
 func startListener() error {
+	wsURL := config.WsRpcUrl
+	httpURL := config.HttpRpcUrl
+	if useFallback {
+		wsURL = config.WsRpcUrlFallback
+		httpURL = config.HttpRpcUrlFallback
+	}
+
 	// Connect to WebSocket
-	wsClient, err := ethclient.Dial(config.WsRpcUrl)
+	wsClient, err := ethclient.Dial(wsURL)
 	if err != nil {
 		return fmt.Errorf("ws connect: %w", err)
 	}
@@ -108,7 +128,7 @@ func startListener() error {
 	// Catch up if behind
 	catchUpTo := currentBlock - uint64(config.ConfirmationBlocks)
 	if lastProcessedBlock < catchUpTo {
-		catchUpBlocks(lastProcessedBlock+1, catchUpTo)
+		catchUpBlocks(lastProcessedBlock+1, catchUpTo, httpURL)
 	}
 
 	// Subscribe to Transfer events
@@ -125,7 +145,7 @@ func startListener() error {
 	log.Println("[ws] subscribed to USDT/USDC Transfer events")
 
 	// HTTP client for nonce/code checks
-	httpClient, err := ethclient.Dial(config.HttpRpcUrl)
+	httpClient, err := ethclient.Dial(httpURL)
 	if err != nil {
 		log.Printf("[warn] HTTP RPC unavailable: %v", err)
 	}
@@ -198,16 +218,16 @@ func startListener() error {
 			if err == nil {
 				liveCatchUpTo := currentBlock - uint64(config.ConfirmationBlocks)
 				if lastProcessedBlock < liveCatchUpTo-10 {
-					catchUpBlocks(lastProcessedBlock+1, liveCatchUpTo)
+					catchUpBlocks(lastProcessedBlock+1, liveCatchUpTo, httpURL)
 				}
 			}
 		}
 	}
 }
 
-func catchUpBlocks(from, to uint64) {
+func catchUpBlocks(from, to uint64, httpURL string) {
 	log.Printf("[catchup] fetching blocks %d → %d", from, to)
-	httpClient, err := ethclient.Dial(config.HttpRpcUrl)
+	httpClient, err := ethclient.Dial(httpURL)
 	if err != nil {
 		log.Printf("[catchup] HTTP error: %v", err)
 		return

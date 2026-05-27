@@ -28,8 +28,6 @@ func scoreInformedEvent(matched *MatchedTrade) InformedScoredEvent {
 	var tags []string
 
 	// ── Step 1: Mixer detection (funders from Tornado Cash etc) ──
-	// Check ALL funders of the original whale (not just current trade)
-	// If any funder is a mixer → massive bonus
 	rootAddr := matched.RootAddress
 	if rootAddr != "" {
 		func() {
@@ -43,7 +41,7 @@ func scoreInformedEvent(matched *MatchedTrade) InformedScoredEvent {
 				rows.Scan(&funder)
 				if isMixer(funder) {
 					score += 50
-					tags = append(tags, "Mixer Funded")
+					tags = append(tags, "混币器打款(+50)")
 					return
 				}
 			}
@@ -52,23 +50,13 @@ func scoreInformedEvent(matched *MatchedTrade) InformedScoredEvent {
 
 	// ── Step 2: Base: risk wallet matched Polymarket trade → +40 ──
 	score += 40
-	tags = append(tags, "Polymarket Trade")
+	tags = append(tags, "匹配交易(+40)")
 
-	// ── Step 3: Proxy/Safe/Deposit confirmation ──
-	switch matched.MatchedWalletType {
-	case WalletPolyProxy, WalletGnosisSafe, WalletDeposit:
-		score += 10
-		tags = append(tags, "Proxy Wallet Match")
-	case WalletEOA:
-		if matched.MatchedWallet != matched.RootAddress {
-			tags = append(tags, "Proxy Unknown")
-		}
-	}
 
 	// ── Step 4: High-information market → +20 ──
 	if matched.TokenOutcome != nil && isHighInfoCategory(matched.TokenOutcome.Category) {
 		score += 20
-		tags = append(tags, "High Information Market")
+		tags = append(tags, "高信息市场(+20)")
 	}
 
 	// ── Step 5: Entity-level 5-min aggregation ──
@@ -92,22 +80,22 @@ func scoreInformedEvent(matched *MatchedTrade) InformedScoredEvent {
 	// Single trade OR aggregated total >= $5K → +20
 	if estimatedUsdc >= informedConfig.MinTradeUsdc || agg.TotalUsd >= informedConfig.MinTradeUsdc {
 		if agg.TotalUsd >= 2*informedConfig.MinTradeUsdc && estimatedUsdc < informedConfig.MinTradeUsdc {
-			tags = append(tags, "Split Order Aggregation")
+			tags = append(tags, "拆单聚合")
 		}
 		score += 20
-		tags = append(tags, "Large Directional Buy")
+		tags = append(tags, "大额定向(+20)")
 	}
 
 	// ── Step 6: Clear direction → +10 ──
 	if matched.Direction != "unknown" {
-		score += 10
+		score += 10; tags = append(tags, "方向明确(+10)")
 	}
 
 	// ── Step 7: YES/NO hedging → -50 ──
 	isHedged := detectHedge(matched)
 	if isHedged {
 		score += informedConfig.HedgePenalty
-		tags = append(tags, "Hedged / Arbitrage Pattern")
+		tags = append(tags, "对冲套利(-50)")
 	}
 
 	// ── Step 8: Time-correlated funding (whale alert → trade timing) ──
@@ -115,10 +103,10 @@ func scoreInformedEvent(matched *MatchedTrade) InformedScoredEvent {
 	if hoursSinceAlert >= 0 {
 		if hoursSinceAlert < 2 {
 			score += 25
-			tags = append(tags, "Time-Correlated Funding")
+			tags = append(tags, "近期巨鲸拨款(+25)")
 		} else if hoursSinceAlert < 24 {
 			score += 10
-			tags = append(tags, "Recent Funding")
+			tags = append(tags, "关联资金(+10)")
 		}
 	}
 
@@ -128,10 +116,10 @@ func scoreInformedEvent(matched *MatchedTrade) InformedScoredEvent {
 		if hoursToEnd >= 0 {
 			if hoursToEnd < 2 {
 				score += 25
-				tags = append(tags, "Imminent Resolution Entry")
+				tags = append(tags, "临期入场(+25)")
 			} else if hoursToEnd < 24 {
 				score += 15
-				tags = append(tags, "Pre-Resolution Timing")
+				tags = append(tags, "临近结算(+15)")
 			}
 		}
 	}
@@ -203,10 +191,10 @@ func scoreNativeDiscovery(trade *DecodedTrade, client *ethclient.Client) *Inform
 		return nil
 	}
 
-	// All conditions met → Polymarket Native Discovery
+	// All conditions met → Polymarket原生发现
 	direction := determineDirection(assetID, "BUY")
 	score := 70 // base: new wallet + high info market + large buy
-	tags := []string{"Polymarket Native Discovery", "Fresh Wallet", "High Information Market", "Large Directional Buy"}
+	tags := []string{"原生发现(+70)", "新钱包", "高信息市场(+20)", "大额定向(+20)"}
 
 	severity := "normal"
 	if score >= informedConfig.HighThreshold {
