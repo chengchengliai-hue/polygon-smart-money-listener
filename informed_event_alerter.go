@@ -176,7 +176,7 @@ func pushToTelegram(alert *InformedEventAlert) {
 
 	text := strings.Join(lines, "\n")
 
-	// Build inline keyboard: market link + wallet link
+	// Build inline keyboard: market link + wallet link + track button
 	marketLink := alert.Data.MarketURL
 	if marketLink == "" {
 		marketLink = "https://polymarket.com"
@@ -185,9 +185,20 @@ func pushToTelegram(alert *InformedEventAlert) {
 	txLink := "https://polygonscan.com/tx/" + alert.Data.TxHash
 	profileLink := "https://polymarket.com/profile/" + alert.Data.MatchedWalletAddress
 
+	trackCtx := TrackContext{
+		Wallet:      alert.Data.MatchedWalletAddress,
+		MarketSlug:  alert.Data.MarketSlug,
+		MarketTitle: alert.Data.MarketQuestion,
+		TokenType:   alert.Data.Outcome,
+		Amount:      alert.Data.EstimatedUsdc,
+		Score:       alert.Data.RiskScore,
+	}
+	trackID := storeTrackContext(trackCtx)
+	trackCallback := fmt.Sprintf("t|%s", trackID)
+
 	keyboard := fmt.Sprintf(
-		`{"inline_keyboard":[[{"text":"📊 查看市场","url":"%s"},{"text":"🔍 钱包","url":"%s"}],[{"text":"📝 交易","url":"%s"}],[{"text":"💼 持仓","url":"%s"}]]}`,
-		marketLink, walletLink, txLink, profileLink,
+		`{"inline_keyboard":[[{"text":"📊 查看市场","url":"%s"},{"text":"🔍 钱包","url":"%s"}],[{"text":"📝 交易","url":"%s"}],[{"text":"💼 持仓","url":"%s"}],[{"text":"👁 跟踪仓位","callback_data":"%s"}]]}`,
+		marketLink, walletLink, txLink, profileLink, trackCallback,
 	)
 
 	var kbMap map[string]interface{}

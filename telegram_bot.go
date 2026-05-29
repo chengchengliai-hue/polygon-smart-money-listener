@@ -60,7 +60,8 @@ func startTelegramBot() {
 func setBotCommands() {
 	commands := `{"commands":[
 		{"command":"smart_money","description":"聪明钱预警"},
-		{"command":"accumulation","description":"吸筹预警"}
+		{"command":"accumulation","description":"吸筹预警"},
+		{"command":"positions","description":"跟踪仓位"}
 	]}`
 	resp, err := http.Post(
 		fmt.Sprintf("https://api.telegram.org/bot%s/setMyCommands", tgBotToken),
@@ -125,6 +126,8 @@ func handleCommand(msg *tgMessage) {
 	case "accumulation":
 		alerts := queryRecentAlerts("accumulation_detected", 20)
 		sendAlerts(msg.Chat.ID, alerts)
+	case "positions":
+		showTrackedPositions(msg.Chat.ID)
 	case "start":
 		showPanel(msg.Chat.ID)
 	default:
@@ -133,21 +136,114 @@ func handleCommand(msg *tgMessage) {
 }
 
 func showPanel(chatID int64) {
-	kb := `{"inline_keyboard":[[{"text":"🧠 聪明钱预警","callback_data":"smart_money"}],[{"text":"📈 吸筹预警","callback_data":"accumulation"}]]}`
+	kb := `{"inline_keyboard":[[{"text":"🧠 聪明钱预警","callback_data":"smart_money"}],[{"text":"📈 吸筹预警","callback_data":"accumulation"}],[{"text":"📋 跟踪仓位","callback_data":"positions"}]]}`
 	sendTgMessage(chatID, "🔘 选择预警类型：", kb)
 }
 
 func handleCallback(cb *tgCallbackQuery) {
+	data := cb.Data
+
+	// Track position: "t|<shortID>"
+	if strings.HasPrefix(data, "t|") {
+		shortID := data[2:]
+		handleTrackCallback(cb, shortID)
+		return
+	}
+
+	// Untrack position: "u|<positionID>"
+	if strings.HasPrefix(data, "u|") {
+		handleUntrackCallback(cb, data[2:])
+		return
+	}
+
 	answerCallback(cb.ID)
 
-	switch cb.Data {
+	switch data {
 	case "smart_money":
 		alerts := queryRecentAlerts("informed_event_activity", 20)
 		sendAlerts(cb.Message.Chat.ID, alerts)
 	case "accumulation":
 		alerts := queryRecentAlerts("accumulation_detected", 20)
 		sendAlerts(cb.Message.Chat.ID, alerts)
+	case "positions":
+		showTrackedPositions(cb.Message.Chat.ID)
 	}
+}
+
+func handleTrackCallback(cb *tgCallbackQuery, shortID string) {
+	trackContextsMu.Lock()
+	ctx, ok := trackContexts[shortID]
+	if ok {
+		delete(trackContexts, shortID)
+	}
+	trackContextsMu.Unlock()
+
+	if !ok {
+		answerCallback(cb.ID)
+		sendTgMessage(cb.Message.Chat.ID, "⚠️ 跟踪信息已过期，请重新查看预警", "")
+		return
+	}
+
+	id, err := insertTrackedPosition(ctx.Wallet, ctx.MarketSlug, ctx.MarketTitle, ctx.TokenType, ctx.Amount, ctx.Score)
+	if err != nil {
+		log.Printf("[tracker] insert position failed: %v", err)
+		answerCallback(cb.ID)
+		return
+	}
+
+	// Add to in-memory index
+	pos := &TrackedPosition{
+		ID:            id,
+		Wallet:        ctx.Wallet,
+		MarketSlug:    ctx.MarketSlug,
+		MarketTitle:   ctx.MarketTitle,
+		TokenType:     ctx.TokenType,
+		TrackedAmount: ctx.Amount,
+		EntryScore:    ctx.Score,
+		Status:        "active",
+	}
+	key := makeTrackKey(ctx.Wallet, ctx.MarketSlug, ctx.TokenType)
+	trackIndexMu.Lock()
+	trackIndex[key] = pos
+	trackIndexMu.Unlock()
+
+	// Edit original message: change button to "✅ 已跟踪"
+	editInlineKeyboard(cb.Message.Chat.ID, cb.Message.MessageID, fmt.Sprintf(
+		`{"inline_keyboard":[[{"text":"📊 查看市场","url":"https://polymarket.com/%s"}],[{"text":"🔍 钱包","url":"https://polygonscan.com/address/%s"}],[{"text":"💼 持仓","url":"https://polymarket.com/profile/%s"}],[{"text":"✅ 已跟踪","callback_data":"tracked"}]]}`,
+		ctx.MarketSlug, ctx.Wallet, ctx.Wallet,
+	))
+
+	answerCallback(cb.ID)
+	log.Printf("[tracker] position tracked: wallet=%s market=%s token=%s amount=$%.0f", ctx.Wallet[:10], ctx.MarketSlug, ctx.TokenType, ctx.Amount)
+}
+
+func handleUntrackCallback(cb *tgCallbackQuery, idStr string) {
+	var id int64
+	fmt.Sscanf(idStr, "%d", &id)
+	if id <= 0 {
+		answerCallback(cb.ID)
+		return
+	}
+
+	markPositionExited(id)
+
+	// Remove from in-memory index
+	trackIndexMu.Lock()
+	for k, v := range trackIndex {
+		if v.ID == id {
+			delete(trackIndex, k)
+			break
+		}
+	}
+	trackIndexMu.Unlock()
+
+	// Edit message: replace the untrack button for that row (just answer callback with confirmation)
+	// Since editing one button in a multi-row keyboard is complex, answer with toast
+	answerCallbackTg(cb.ID, "已取消跟踪")
+
+	// Re-send updated list
+	showTrackedPositions(cb.Message.Chat.ID)
+	log.Printf("[tracker] position %d untracked", id)
 }
 
 type tgAlertRow struct {
@@ -382,16 +478,27 @@ func formatSmartMoneyAlert(a tgAlertRow, idx, total int) (string, string) {
 	profileLink := "https://polymarket.com/profile/" + a.MatchedAddress
 	txLink := "https://polygonscan.com/tx/" + a.TxHash
 
+	trackCtx := TrackContext{
+		Wallet:      a.MatchedAddress,
+		MarketSlug:  a.MarketSlug,
+		MarketTitle: market,
+		TokenType:   a.Outcome,
+		Amount:      a.EstimatedUsdc,
+		Score:       a.Score,
+	}
+	trackID := storeTrackContext(trackCtx)
+	trackCB := fmt.Sprintf("t|%s", trackID)
+
 	var kb string
 	if a.TxHash != "" {
 		kb = fmt.Sprintf(
-			`{"inline_keyboard":[[{"text":"📊 查看市场","url":"%s"},{"text":"🔍 钱包","url":"%s"}],[{"text":"📝 交易","url":"%s"}],[{"text":"💼 持仓","url":"%s"}]]}`,
-			marketURL, walletLink, txLink, profileLink,
+			`{"inline_keyboard":[[{"text":"📊 查看市场","url":"%s"},{"text":"🔍 钱包","url":"%s"}],[{"text":"📝 交易","url":"%s"}],[{"text":"💼 持仓","url":"%s"}],[{"text":"👁 跟踪仓位","callback_data":"%s"}]]}`,
+			marketURL, walletLink, txLink, profileLink, trackCB,
 		)
 	} else {
 		kb = fmt.Sprintf(
-			`{"inline_keyboard":[[{"text":"📊 查看市场","url":"%s"},{"text":"🔍 钱包","url":"%s"}],[{"text":"💼 持仓","url":"%s"}]]}`,
-			marketURL, walletLink, profileLink,
+			`{"inline_keyboard":[[{"text":"📊 查看市场","url":"%s"},{"text":"🔍 钱包","url":"%s"}],[{"text":"💼 持仓","url":"%s"}],[{"text":"👁 跟踪仓位","callback_data":"%s"}]]}`,
+			marketURL, walletLink, profileLink, trackCB,
 		)
 	}
 
@@ -452,6 +559,87 @@ func answerCallback(callbackID string) {
 		"application/json",
 		strings.NewReader(payload),
 	)
+}
+
+func answerCallbackTg(callbackID, text string) {
+	payload := fmt.Sprintf(`{"callback_query_id":"%s","text":"%s"}`, callbackID, text)
+	http.Post(
+		fmt.Sprintf("https://api.telegram.org/bot%s/answerCallbackQuery", tgBotToken),
+		"application/json",
+		strings.NewReader(payload),
+	)
+}
+
+func editInlineKeyboard(chatID int64, messageID int, keyboard string) {
+	var kbMap map[string]interface{}
+	json.Unmarshal([]byte(keyboard), &kbMap)
+
+	payload := map[string]interface{}{
+		"chat_id":      chatID,
+		"message_id":   messageID,
+		"reply_markup": kbMap,
+	}
+	payloadBytes, _ := json.Marshal(payload)
+	resp, err := http.Post(
+		fmt.Sprintf("https://api.telegram.org/bot%s/editMessageReplyMarkup", tgBotToken),
+		"application/json",
+		bytes.NewReader(payloadBytes),
+	)
+	if err != nil {
+		log.Printf("[tg-bot] edit markup error: %v", err)
+		return
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	log.Printf("[tg-bot] edit markup: %s", safeTruncate(string(body), 80))
+}
+
+func showTrackedPositions(chatID int64) {
+	positions := getActiveTrackedPositions()
+	if len(positions) == 0 {
+		sendTgMessage(chatID, "📋 暂无跟踪中的仓位", "")
+		return
+	}
+
+	lines := []string{fmt.Sprintf("📋 跟踪仓位 — 共 %d 个", len(positions)), ""}
+
+	for i, p := range positions {
+		walletShort := p.Wallet
+		if len(walletShort) > 14 {
+			walletShort = walletShort[:8] + "..." + walletShort[len(walletShort)-6:]
+		}
+
+		direction := fmt.Sprintf("看空（买入 %s）", p.TokenType)
+		if p.TokenType == "YES" {
+			direction = "看多 YES"
+		}
+
+		lines = append(lines,
+			fmt.Sprintf("%d. %s", i+1, walletShort),
+			fmt.Sprintf("   📌 %s", p.MarketTitle),
+			fmt.Sprintf("   💰 $%.0f  |  %s  |  原始评分 %d", p.TrackedAmount, direction, p.EntryScore),
+			fmt.Sprintf("   ⏰ 跟踪自 %s", p.CreatedAt),
+			"",
+		)
+	}
+
+	text := strings.Join(lines, "\n")
+
+	// Build keyboard: one row per position with untrack button
+	kbRows := make([]json.RawMessage, 0)
+	for _, p := range positions {
+		marketURL := "https://polymarket.com/market/" + p.MarketSlug
+		walletLink := "https://polygonscan.com/address/" + p.Wallet
+		untrackCB := fmt.Sprintf("u|%d", p.ID)
+		row := json.RawMessage(fmt.Sprintf(
+			`[{"text":"🔗 市场","url":"%s"},{"text":"🔍 钱包","url":"%s"},{"text":"❌ 取消跟踪","callback_data":"%s"}]`,
+			marketURL, walletLink, untrackCB,
+		))
+		kbRows = append(kbRows, row)
+	}
+
+	kbBytes, _ := json.Marshal(map[string]interface{}{"inline_keyboard": kbRows})
+	sendTgMessage(chatID, text, string(kbBytes))
 }
 
 func safeTruncate(s string, n int) string {

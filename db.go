@@ -56,6 +56,9 @@ func initDB() {
 
 	// Polymarket informed event tables
 	initInformedTables(db)
+
+	// Position tracker tables
+	initPositionTrackerTables(db)
 }
 
 func isAddressSeen(address string) bool {

@@ -83,6 +83,9 @@ func runDataAPIPoller() error {
 			markPolymarketEventSeen(t.TransactionHash, t.TransactionHash, 0, 0)
 			eventCount++
 
+			// Check tracked positions for exit (before side filter, catches SELL too)
+			checkTrackedExit(t)
+
 			side := strings.ToUpper(t.Side)
 			if side != "BUY" {
 				sideSkipCount++

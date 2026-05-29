@@ -45,6 +45,9 @@ func main() {
 	startBinancePoller()
 	startTelegramBot()
 
+	loadTrackIndex()
+	startTrackContextGC()
+
 	// Handle graceful shutdown
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
