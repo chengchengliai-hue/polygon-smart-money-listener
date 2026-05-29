@@ -61,7 +61,8 @@ func setBotCommands() {
 	commands := `{"commands":[
 		{"command":"smart_money","description":"聪明钱预警"},
 		{"command":"accumulation","description":"吸筹预警"},
-		{"command":"positions","description":"跟踪仓位"}
+		{"command":"positions","description":"跟踪仓位"},
+		{"command":"clear","description":"清除记录"}
 	]}`
 	resp, err := http.Post(
 		fmt.Sprintf("https://api.telegram.org/bot%s/setMyCommands", tgBotToken),
@@ -121,13 +122,15 @@ func handleCommand(msg *tgMessage) {
 
 	switch text {
 	case "smart_money", "smartmoney":
-		alerts := queryRecentAlerts("informed_event_activity", 20)
+		alerts := queryRecentAlerts("informed_event_activity", 5)
 		sendAlerts(msg.Chat.ID, alerts)
 	case "accumulation":
-		alerts := queryRecentAlerts("accumulation_detected", 20)
+		alerts := queryRecentAlerts("accumulation_detected", 5)
 		sendAlerts(msg.Chat.ID, alerts)
 	case "positions":
 		showTrackedPositions(msg.Chat.ID)
+	case "clear":
+		sendTgMessage(msg.Chat.ID, "── 以上记录已清除 ──", "")
 	case "start":
 		showPanel(msg.Chat.ID)
 	default:
@@ -160,10 +163,10 @@ func handleCallback(cb *tgCallbackQuery) {
 
 	switch data {
 	case "smart_money":
-		alerts := queryRecentAlerts("informed_event_activity", 20)
+		alerts := queryRecentAlerts("informed_event_activity", 5)
 		sendAlerts(cb.Message.Chat.ID, alerts)
 	case "accumulation":
-		alerts := queryRecentAlerts("accumulation_detected", 20)
+		alerts := queryRecentAlerts("accumulation_detected", 5)
 		sendAlerts(cb.Message.Chat.ID, alerts)
 	case "positions":
 		showTrackedPositions(cb.Message.Chat.ID)
