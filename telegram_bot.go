@@ -629,10 +629,10 @@ func showTrackedPositions(chatID int64) {
 	kbRows := make([]json.RawMessage, 0)
 	for _, p := range positions {
 		marketURL := "https://polymarket.com/market/" + p.MarketSlug
-		walletLink := "https://polygonscan.com/address/" + p.Wallet
+		walletLink := "https://polymarket.com/profile/" + p.Wallet
 		untrackCB := fmt.Sprintf("u|%d", p.ID)
 		row := json.RawMessage(fmt.Sprintf(
-			`[{"text":"🔗 市场","url":"%s"},{"text":"🔍 钱包","url":"%s"},{"text":"❌ 取消跟踪","callback_data":"%s"}]`,
+			`[{"text":"🔗 市场","url":"%s"},{"text":"💼 当前持仓","url":"%s"},{"text":"❌ 取消跟踪","callback_data":"%s"}]`,
 			marketURL, walletLink, untrackCB,
 		))
 		kbRows = append(kbRows, row)
