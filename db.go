@@ -59,6 +59,9 @@ func initDB() {
 
 	// Position tracker tables
 	initPositionTrackerTables(db)
+
+	// Copy trade tables
+	initCopyTradeTables(db)
 }
 
 func isAddressSeen(address string) bool {

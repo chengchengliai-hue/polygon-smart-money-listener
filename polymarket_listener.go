@@ -86,6 +86,9 @@ func runDataAPIPoller() error {
 			// Check tracked positions for exit (before side filter, catches SELL too)
 			checkTrackedExit(t)
 
+			// Check copy-trade positions for exit
+			checkCopyTrade(t)
+
 			side := strings.ToUpper(t.Side)
 			if side != "BUY" {
 				sideSkipCount++
@@ -212,7 +215,6 @@ func runDataAPIPoller() error {
 	}
 }
 
-
 func directionLabel(outcome, side string) string {
 	outcomeStr := strings.ToUpper(outcome)
 	if side != "BUY" {
@@ -265,7 +267,9 @@ func fetchEndDate(assetID string) string {
 	}
 	defer resp.Body.Close()
 
-	var book struct{ Market string `json:"market"` }
+	var book struct {
+		Market string `json:"market"`
+	}
 	if err := json.NewDecoder(resp.Body).Decode(&book); err != nil || book.Market == "" {
 		return ""
 	}

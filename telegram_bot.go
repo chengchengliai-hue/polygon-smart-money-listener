@@ -62,7 +62,9 @@ func setBotCommands() {
 		{"command":"smart_money","description":"聪明钱预警"},
 		{"command":"accumulation","description":"吸筹预警"},
 		{"command":"positions","description":"跟踪仓位"},
-		{"command":"clear","description":"清除记录"}
+		{"command":"clear","description":"清除记录"},
+		{"command":"copy","description":"跟单回测"},
+		{"command":"copy_stats","description":"跟单统计"}
 	]}`
 	resp, err := http.Post(
 		fmt.Sprintf("https://api.telegram.org/bot%s/setMyCommands", tgBotToken),
@@ -131,6 +133,10 @@ func handleCommand(msg *tgMessage) {
 		showTrackedPositions(msg.Chat.ID)
 	case "clear":
 		sendTgMessage(msg.Chat.ID, "── 以上记录已清除 ──", "")
+	case "copy":
+		showCopyPositions(msg.Chat.ID)
+	case "copy_stats":
+		showCopyStats(msg.Chat.ID)
 	case "start":
 		showPanel(msg.Chat.ID)
 	default:
@@ -643,6 +649,185 @@ func showTrackedPositions(chatID int64) {
 
 	kbBytes, _ := json.Marshal(map[string]interface{}{"inline_keyboard": kbRows})
 	sendTgMessage(chatID, text, string(kbBytes))
+}
+
+func showCopyPositions(chatID int64) {
+	positions := getAllCopyPositions()
+	if len(positions) == 0 {
+		sendTgMessage(chatID, "📊 暂无跟单记录", "")
+		return
+	}
+
+	active, closed, resolved := 0, 0, 0
+	totalCost := 0.0
+	totalPnl := 0.0
+	for _, p := range positions {
+		switch p.Status {
+		case "active":
+			active++
+		case "closed":
+			closed++
+		case "resolved":
+			resolved++
+		}
+		totalCost += p.TotalCost
+		totalPnl += p.FinalPnl
+	}
+
+	lines := []string{
+		fmt.Sprintf("📊 跟单回测"),
+		fmt.Sprintf("进行中: %d 笔 | 已平仓: %d 笔 | 已结算: %d 笔", active, closed, resolved),
+		fmt.Sprintf("总投入: $%.0f | 总盈亏: $%+.0f", totalCost, totalPnl),
+		"",
+	}
+
+	for i, p := range positions {
+		if i >= 10 {
+			lines = append(lines, fmt.Sprintf("... 共 %d 笔，输入 /copy_stats 查看统计", len(positions)))
+			break
+		}
+		walletShort := p.Wallet
+		if len(walletShort) > 14 {
+			walletShort = walletShort[:8] + "..." + walletShort[len(walletShort)-6:]
+		}
+
+		statusEmoji := map[string]string{"active": "📊", "closed": "🔴", "resolved": "✅"}
+		statusCN := map[string]string{"active": "进行中", "closed": "已平仓", "resolved": "已结算"}
+
+
+		sourceCN := "风险池"
+		if p.AlertSource == "native_discovery" {
+			sourceCN = "原生发现"
+		}
+
+		lines = append(lines,
+			fmt.Sprintf("%s %d. %s", statusEmoji[p.Status], i+1, walletShort),
+			fmt.Sprintf("   📌 %s", p.MarketTitle),
+			fmt.Sprintf("   💰 入场 $%.4f × %.0f 份 | 成本 $%.0f", p.EntryPrice, p.Shares, p.TotalCost),
+			fmt.Sprintf("   📈 评分 %d | 来源 %s | %s", p.AlertScore, sourceCN, statusCN[p.Status]),
+		)
+		if p.Status != "active" {
+			lines = append(lines, fmt.Sprintf("   💵 盈亏: $%+.2f", p.FinalPnl))
+		}
+		lines = append(lines, "")
+	}
+
+	sendTgMessage(chatID, strings.Join(lines, "\n"), "")
+}
+
+func showCopyStats(chatID int64) {
+	positions := getAllCopyPositions()
+	if len(positions) == 0 {
+		sendTgMessage(chatID, "📈 暂无跟单数据", "")
+		return
+	}
+
+	settled := make([]CopyPosition, 0)
+	totalPnl := 0.0
+	for _, p := range positions {
+		totalPnl += p.FinalPnl
+		if p.Status == "resolved" || p.Status == "closed" {
+			settled = append(settled, p)
+		}
+	}
+
+	wins := 0
+	losses := 0
+	for _, p := range settled {
+		if p.FinalPnl > 0 {
+			wins++
+		} else {
+			losses++
+		}
+	}
+
+	lines := []string{
+		"📈 跟单统计",
+		"",
+		fmt.Sprintf("总跟单: %d 笔", len(positions)),
+		fmt.Sprintf("已结算/平仓: %d 笔 | 胜 %d / 负 %d", len(settled), wins, losses),
+	}
+
+	if len(settled) > 0 {
+		winRate := float64(wins) / float64(len(settled)) * 100
+		lines = append(lines, fmt.Sprintf("胜率: %.0f%%", winRate))
+	}
+
+	lines = append(lines,
+		fmt.Sprintf("总盈亏: $%+.0f", totalPnl),
+		"",
+	)
+
+	// By score bracket
+	brackets := []struct {
+		label string
+		min   int
+		max   int
+	}{
+		{"90+ 分", 90, 999},
+		{"80-89 分", 80, 89},
+		{"70-79 分", 70, 79},
+		{"<70 分", 0, 69},
+	}
+
+	lines = append(lines, "按评分分组:")
+	for _, b := range brackets {
+		count, settledCount, winCount, pnl := 0, 0, 0, 0.0
+		for _, p := range positions {
+			if p.AlertScore >= b.min && p.AlertScore <= b.max {
+				count++
+				pnl += p.FinalPnl
+				if p.Status == "resolved" || p.Status == "closed" {
+					settledCount++
+					if p.FinalPnl > 0 {
+						winCount++
+					}
+				}
+			}
+		}
+		if count > 0 {
+			if settledCount > 0 {
+				lines = append(lines, fmt.Sprintf("  %s: %d笔 结算%d 胜%d 盈亏 $%+.0f", b.label, count, settledCount, winCount, pnl))
+			} else {
+				lines = append(lines, fmt.Sprintf("  %s: %d笔 (暂无结算)", b.label, count))
+			}
+		}
+	}
+
+	// By source
+	lines = append(lines, "", "按来源分组:")
+	sources := []struct {
+		key   string
+		label string
+	}{
+		{"risk_pool", "风险池命中"},
+		{"native_discovery", "原生发现"},
+	}
+
+	for _, s := range sources {
+		count, settledCount, winCount, pnl := 0, 0, 0, 0.0
+		for _, p := range positions {
+			if p.AlertSource == s.key {
+				count++
+				pnl += p.FinalPnl
+				if p.Status == "resolved" || p.Status == "closed" {
+					settledCount++
+					if p.FinalPnl > 0 {
+						winCount++
+					}
+				}
+			}
+		}
+		if count > 0 {
+			if settledCount > 0 {
+				lines = append(lines, fmt.Sprintf("  %s: %d笔 结算%d 胜%d 盈亏 $%+.0f", s.label, count, settledCount, winCount, pnl))
+			} else {
+				lines = append(lines, fmt.Sprintf("  %s: %d笔 (暂无结算)", s.label, count))
+			}
+		}
+	}
+
+	sendTgMessage(chatID, strings.Join(lines, "\n"), "")
 }
 
 func safeTruncate(s string, n int) string {

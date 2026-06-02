@@ -87,6 +87,9 @@ func outputInformedAlert(scored InformedScoredEvent) {
 	if tgBotToken != "" && tgChatID != "" {
 		pushToTelegram(&alert)
 	}
+
+	// Auto copy-trade (async, non-blocking backtest)
+	go autoCopyTrade(&alert)
 }
 
 func pushToTelegram(alert *InformedEventAlert) {
