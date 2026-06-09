@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"sync"
 	"time"
 )
@@ -115,6 +116,29 @@ func collectGarbage() {
 	for key, win := range windows {
 		if win.LastSeen < threshold {
 			delete(windows, key)
+		}
+	}
+
+	// GC DB dedup tables every 5 minutes (not every 60s to avoid thrashing)
+	if now%300 < 60 {
+		go gcDBTables()
+	}
+}
+
+func gcDBTables() {
+	dbWriteMu.Lock()
+	defer dbWriteMu.Unlock()
+	cutoff := time.Now().Add(-30 * time.Minute).UTC().Format("2006-01-02 15:04:05")
+	r1, _ := db.Exec(`DELETE FROM polymarket_events_seen WHERE seen_at < ?`, cutoff)
+	r2, _ := db.Exec(`DELETE FROM seen_addresses WHERE seen_at < ?`, cutoff)
+	if r1 != nil {
+		if n, _ := r1.RowsAffected(); n > 0 {
+			log.Printf("[gc] removed %d old event dedup entries", n)
+		}
+	}
+	if r2 != nil {
+		if n, _ := r2.RowsAffected(); n > 0 {
+			log.Printf("[gc] removed %d old address dedup entries", n)
 		}
 	}
 }

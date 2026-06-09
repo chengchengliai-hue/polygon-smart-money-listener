@@ -1,6 +1,6 @@
 package main
 
-// CopyPosition represents an auto-copied virtual position for backtesting
+// CopyPosition represents an auto-copied position with real trading tracking.
 type CopyPosition struct {
 	ID          int64
 	Wallet      string
@@ -10,16 +10,23 @@ type CopyPosition struct {
 	TokenType   string // YES or NO
 	ConditionID string
 
-	EntryPrice float64 // price per share at entry
-	Shares     float64 // number of shares bought
-	TotalCost  float64 // total USDC spent
+	EntryPrice float64 // VWAP entry price
+	Shares     float64 // planned shares
+	TotalCost  float64 // planned USDC spent
 
-	AlertScore  int    // original alert score
+	// Real order tracking
+	RealOrderID      string
+	RealFilledShares float64
+	RealFilledPrice  float64
+	RealSellOrderID  string
+	RealSellPrice    float64
+
+	AlertScore  int
 	AlertSource string // "risk_pool" or "native_discovery"
 
-	RealizedPnl float64 // P&L from partial/full exits before resolution
-	Status      string  // active / closed / resolved
-	FinalPnl    float64 // final P&L after resolution
+	RealizedPnl float64
+	Status      string // active / closed / resolved
+	FinalPnl    float64
 
 	CreatedAt  string
 	UpdatedAt  string
@@ -31,10 +38,10 @@ type CopyTradeLog struct {
 	ID         int64
 	PositionID int64
 	Action     string  // open / close / resolve
-	Price      float64 // trade price
+	Price      float64
 	Shares     float64
 	Cost       float64 // positive=spent, negative=received
-	Pnl        float64 // realized P&L for this action
-	TriggerTx  string  // source wallet tx that triggered this action
+	Pnl        float64
+	TriggerTx  string
 	CreatedAt  string
 }

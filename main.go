@@ -37,6 +37,7 @@ func main() {
 
 	loadConfig()
 	initDB()
+	initClob()
 
 	// Start Polymarket informed event listener
 	startWalletLinkRefresher()
@@ -62,6 +63,10 @@ func main() {
 		os.Exit(0)
 	}()
 
+	if os.Getenv("WHALE_LISTENER_DISABLED") == "1" {
+		log.Println("[boot] whale listener DISABLED (WHALE_LISTENER_DISABLED=1)")
+		select {}
+	}
 	run()
 }
 

@@ -42,7 +42,7 @@ func loadInformedConfig() {
 		MarketRefreshSec: getEnvInt("INFORMED_MARKET_REFRESH_SECONDS", 300),
 		AlertThreshold:   getEnvInt("INFORMED_ALERT_THRESHOLD", 70),
 		HighThreshold:    getEnvInt("INFORMED_HIGH_ALERT_THRESHOLD", 90),
-		MinTradeUsdc:     getEnvFloat("INFORMED_MIN_TRADE_USDC", 5000),
+		MinTradeUsdc:     getEnvFloat("INFORMED_MIN_TRADE_USDC", 2000),
 		WindowSeconds:    getEnvInt("INFORMED_WINDOW_SECONDS", 900),
 		MinLiquidity:     getEnvFloat("INFORMED_MARKET_MIN_LIQUIDITY", 1000),
 		HedgePenalty:     getEnvInt("HEDGE_PENALTY", -50),

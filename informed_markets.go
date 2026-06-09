@@ -40,7 +40,7 @@ var highInfoCategories = map[string]bool{
 	"political": true, "macro": true, "legal_regulatory": true,
 	"corporate": true, "entertainment_leak": true,
 	"geopolitical": true, "crypto_regulatory": true, "tech_release": true,
-	"market_resolution": true,
+	"market_resolution": true, "sports_injury": true,
 }
 
 func startMarketRefresher() {
